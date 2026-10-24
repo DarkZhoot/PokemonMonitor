@@ -44,6 +44,8 @@ def cycle(settings, store, adapter, telegram, log, *, discover=False):
     deliver(store, telegram, log)
     result = None
     if discover:
+        store.mark_discovery()
+        log("discovery_started")
         try:
             result = adapter.search()
         except Exception:
@@ -115,6 +117,15 @@ def cycle(settings, store, adapter, telegram, log, *, discover=False):
             url=p.url,
             duration_seconds=round(time.monotonic() - product_started, 3),
         )
+    if discover:
+        complete = result is not None and result.complete
+        if complete:
+            store.mark_discovery(successful=True)
+        log(
+            "discovery_finished",
+            complete=complete,
+            found_products=len(result.products) if result is not None else 0,
+        )
     delivered = deliver(store, telegram, log)
     failed = store.db.execute(
         "SELECT count(*) FROM events WHERE status='failed'"
@@ -133,6 +144,13 @@ def cycle(settings, store, adapter, telegram, log, *, discover=False):
         duration_seconds=round(time.monotonic() - started, 3),
     )
     return healthy and delivered and not failed and not pending
+
+
+def scheduled_cycle(settings, store, adapter, telegram, log, *, force_discovery=False):
+    due = force_discovery or store.discovery_due(
+        settings.discovery_interval, settings.discovery_retry_interval
+    )
+    return cycle(settings, store, adapter, telegram, log, discover=due)
 
 
 def main():
@@ -208,13 +226,13 @@ def main():
                 adapter = PlazaVea(settings)
                 while True:
                     try:
-                        ok = cycle(
+                        ok = scheduled_cycle(
                             settings,
                             store,
                             adapter,
                             telegram,
                             log,
-                            discover=args.discover,
+                            force_discovery=args.discover,
                         )
                     except Exception:
                         log(

@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 from dataclasses import asdict
 from datetime import datetime
 from uuid import uuid4
@@ -33,6 +34,32 @@ class Store:
             Product(**json.loads(r["data"]))
             for r in self.db.execute("SELECT data FROM products")
         ]
+
+    def discovery_due(self, interval, retry_interval, timestamp=None):
+        timestamp = time.time() if timestamp is None else timestamp
+        rows = dict(
+            self.db.execute(
+                "SELECT key,value FROM meta WHERE key IN ('discovery_attempt', 'discovery_success')"
+            ).fetchall()
+        )
+        success = (
+            float(rows["discovery_success"]) if "discovery_success" in rows else None
+        )
+        attempt = (
+            float(rows["discovery_attempt"]) if "discovery_attempt" in rows else None
+        )
+        if success is not None and timestamp - success < interval:
+            return False
+        if success is not None and (attempt is None or attempt <= success):
+            return True
+        return attempt is None or timestamp - attempt >= retry_interval
+
+    def mark_discovery(self, successful=False):
+        key = "discovery_success" if successful else "discovery_attempt"
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO meta VALUES(?,?)", (key, str(time.time()))
+            )
 
     def migrate(self, root):
         if self.db.execute("SELECT 1 FROM meta WHERE key='migrated'").fetchone():

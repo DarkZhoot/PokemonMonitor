@@ -28,24 +28,36 @@ Copy-Item .env.example .env
 
 Edita `.env` localmente; nunca lo subas. Las variables ya exportadas prevalecen sobre `.env`. No pegues tokens en comandos, capturas, issues ni logs. En Linux limita el acceso con `chmod 600 .env`.
 
-## Seguimiento rápido con descubrimiento manual
+## Seguimiento rápido y descubrimiento cada cuatro horas
 
-`--once` y `--loop` **ya no hacen búsquedas generales**. Solo actualizan detalles y stock de los candidatos guardados, además de productos configurados explícitamente. Los cientos de publicaciones pendientes se conservan pero no se consultan en cada ciclo.
+`--once` y `--loop` consultan detalles y stock de los candidatos guardados y de los productos configurados explícitamente. Además, hacen una búsqueda general **solo cuando toca**: al primer arranque sin fecha guardada y después cada cuatro horas. Las publicaciones pendientes se conservan pero no se consultan en cada revisión de stock.
 
-```powershell
-# Solo cuando quieras descubrir productos nuevos (primera vez si no hay candidatos)
-.\.venv\Scripts\python.exe main.py --discover
-# Ver nombres y enlaces directos guardados; no usa Internet
-.\.venv\Scripts\python.exe main.py --list-products
-# Seguir solo los objetivos guardados
-.\.venv\Scripts\python.exe main.py --loop
+Configura en `.env` (los archivos existentes no se sobrescriben al actualizar):
+
+```dotenv
+MONITOR_INTERVAL=120
+DISCOVERY_INTERVAL=14400
+DISCOVERY_RETRY_INTERVAL=900
 ```
 
-Detén el bucle con Ctrl+C antes de ejecutar `--discover`, y reinícialo después. El bloqueo impide ejecutar ambos simultáneamente. La búsqueda manual utiliza los términos configurados, guarda candidatos y pendientes, y puede enviar alertas de candidatos nuevos disponibles. Reutiliza los detalles completos de búsqueda para evitar otra consulta por cada resultado. Los pendientes solo se vuelven a evaluar si reaparecen en un descubrimiento o están configurados explícitamente. No borres la base existente: sus candidatos y transiciones se reutilizan sin reenviar avisos por disponibilidad continua.
+```powershell
+# Arrancar seguimiento + descubrimiento automático
+.\.venv\Scripts\python.exe main.py --loop
+# Ver nombres y enlaces guardados; no usa Internet
+.\.venv\Scripts\python.exe main.py --list-products
+# Opcional: forzar un descubrimiento ahora, sin esperar cuatro horas
+.\.venv\Scripts\python.exe main.py --discover
+```
 
-Para revisar aproximadamente cada dos minutos **después de terminar el ciclo**, usa `MONITOR_INTERVAL=120`. Se mantiene la pausa entre peticiones y la gestión de límites; no garantiza un tiempo fijo ni ausencia de bloqueos. `product_checked.duration_seconds` mide el procesamiento del producto (incluye red, pausas, persistencia y un eventual envío); `cycle_finished.duration_seconds` mide el ciclo completo. No son tiempos exclusivos de la respuesta HTTP.
+La fecha de la última búsqueda completada y la del último intento quedan en SQLite. Reiniciar el programa no reinicia las cuatro horas. Al actualizar desde la versión manual anterior, se hará un descubrimiento inicial porque todavía no existe esa fecha. Las búsquedas incompletas o fallidas conservan sus resultados parciales y los objetivos conocidos, sin marcar éxito; cuando corresponde un descubrimiento, el reintento espera 15 minutos por defecto, también tras reiniciar. Los fallos de stock o Telegram no invalidan por sí mismos una búsqueda completada.
 
-En Linux usa los mismos argumentos con `.venv/bin/python`. Los ejemplos de cron y Programador de tareas ejecutan ahora solamente seguimiento. Para detectar nuevas publicaciones debes lanzar expresamente `--discover`.
+El planificador se comprueba al comenzar cada ciclo: las cuatro horas son un mínimo entre búsquedas completadas y la siguiente puede empezar algo después, según el ciclo y las pausas. Los 120 segundos se esperan **después de terminar cada revisión**, no son un periodo exacto entre inicios. No hay tareas simultáneas: cuando toca descubrir, ese ciclo puede tardar más y luego continúa el seguimiento habitual.
+
+Para forzar `--discover` o listar mientras corre el bucle, deténlo con Ctrl+C y reinícialo después. El bloqueo impide ejecutar ambos simultáneamente. El descubrimiento guarda candidatos y pendientes y puede enviar alertas de nuevos candidatos disponibles. Reutiliza los detalles completos de búsqueda para evitar otra consulta por resultado. Los pendientes se reevalúan cuando reaparecen en un descubrimiento o están configurados explícitamente. No borres la base existente: conserva candidatos y transiciones sin repetir avisos de disponibilidad continua.
+
+Se mantienen las pausas entre peticiones y la gestión de límites; la optimización no garantiza ausencia de bloqueos. `product_checked.duration_seconds` mide el procesamiento del producto (red, pausas, persistencia y eventual envío); `cycle_finished.duration_seconds` mide el ciclo completo. Los eventos `discovery_started` y `discovery_finished` permiten identificar cuándo se buscó y si terminó completamente.
+
+En Linux usa los mismos argumentos con `.venv/bin/python`. Cron y Programador de tareas también evalúan el vencimiento del descubrimiento al ejecutar `--once`, utilizando la misma base y configuración.
 
 ## Configuración
 
@@ -54,7 +66,9 @@ En Linux usa los mismos argumentos con `.venv/bin/python`. Los ejemplos de cron 
 | `TELEGRAM_BOT_TOKEN` | Token secreto de BotFather |
 | `TELEGRAM_CHAT_ID` | Identificador del chat que recibirá avisos |
 | `MONITOR_DATA_DIR` | `runtime`, relativo al repositorio; mismo directorio para todas las ejecuciones |
-| `MONITOR_INTERVAL` | 600 segundos, mínimo 60; solo para `--loop` |
+| `MONITOR_INTERVAL` | 120 segundos de espera tras cada ciclo, mínimo 60; solo para `--loop` |
+| `DISCOVERY_INTERVAL` | 14400 segundos (4 horas) entre descubrimientos completados |
+| `DISCOVERY_RETRY_INTERVAL` | 900 segundos (15 minutos) antes de reintentar un descubrimiento vencido fallido |
 | `MONITOR_TIMEOUT` | 20 segundos por petición |
 | `MONITOR_REQUEST_DELAY` | 1 segundo mínimo entre peticiones; configurable desde 0.5 |
 | `MONITOR_RETRIES` | 2 reintentos adicionales de red/5xx; máximo 5 |
@@ -139,7 +153,7 @@ No ejecutes `--loop` y cron simultáneamente. Usa siempre el mismo `MONITOR_DATA
 En una máquina encendida permanentemente, con rutas absolutas:
 
 ```cron
-*/10 * * * * cd /ruta/PokemonMonitor && /ruta/PokemonMonitor/.venv/bin/python main.py --once >/dev/null 2>&1
+*/2 * * * * cd /ruta/PokemonMonitor && /ruta/PokemonMonitor/.venv/bin/python main.py --once >/dev/null 2>&1
 ```
 
 Los eventos y errores quedan en `runtime/monitor.jsonl`. Configura supervisión externa de códigos de salida/logs para detectar que cron deja de ejecutarse. No hay notificación de salud por un canal independiente si Telegram falla.
@@ -169,7 +183,7 @@ Activa con `sudo systemctl daemon-reload` y `sudo systemctl enable --now pokemon
 
 ### Programador de tareas de Windows
 
-Crea una tarea con desencadenador diario, repetición **cada 10 minutos**, duración indefinida. Programa: `C:\ruta\PokemonMonitor\.venv\Scripts\python.exe`. Argumentos: `C:\ruta\PokemonMonitor\main.py --once`. Iniciar en: `C:\ruta\PokemonMonitor`. Activa «Ejecutar lo antes posible si se omitió el inicio» y «No iniciar una instancia nueva» si ya está ejecutándose. Selecciona una cuenta con permisos y una política de energía que mantenga la máquina disponible. No hace falta ejecutar como administrador.
+Crea una tarea con desencadenador diario, repetición **cada 2 minutos**, duración indefinida. Programa: `C:\ruta\PokemonMonitor\.venv\Scripts\python.exe`. Argumentos: `C:\ruta\PokemonMonitor\main.py --once`. Iniciar en: `C:\ruta\PokemonMonitor`. Activa «Ejecutar lo antes posible si se omitió el inicio» y «No iniciar una instancia nueva» si ya está ejecutándose. Selecciona una cuenta con permisos y una política de energía que mantenga la máquina disponible. No hace falta ejecutar como administrador.
 
 ## Persistencia, eventos y recuperación
 
@@ -183,7 +197,7 @@ Tipos de alerta:
 - `REPOSICION`: último estado concluyente agotado y ahora disponible, aunque haya errores intermedios.
 - `DISPONIBILIDAD_CONFIRMADA`: producto registrado sin estado concluyente previo y ahora disponible.
 
-Una pérdida temporal de conectividad no borra el último estado concluyente ni genera por sí sola otro aviso al recuperar una disponibilidad ya conocida. Los candidatos nuevos con stock desconocido y los pendientes de idioma/edición se conservan para futuras revisiones. Cambiar palabras clave solo afecta al próximo `--discover` y no borra el histórico. Para retirar definitivamente un producto se necesita una futura opción de exclusión por ID o gestión de bajas; por ahora las exclusiones de texto impiden sus alertas al revalidar detalles.
+Una pérdida temporal de conectividad no borra el último estado concluyente ni genera por sí sola otro aviso al recuperar una disponibilidad ya conocida. Los candidatos nuevos con stock desconocido y los pendientes de idioma/edición se conservan para futuras revisiones. Cambiar palabras clave solo afecta al próximo descubrimiento automático o manual y no borra el histórico. Para retirar definitivamente un producto se necesita una futura opción de exclusión por ID o gestión de bajas; por ahora las exclusiones de texto impiden sus alertas al revalidar detalles.
 
 Las alertas se intentan enviar al detectar el evento, sin esperar a terminar de revisar todos los productos. La cola registra `pending`, `sent`, `failed`, número de intentos, próxima fecha y error redactado. `--loop` procesa reintentos aproximadamente cada 5 segundos; en cron, solo en las próximas ejecuciones. Los 429 respetan `retry_after`; fallos permanentes o intentos agotados requieren `--retry-failed`. No se consumen intentos si faltan credenciales. Una espera impuesta por Telegram se comparte entre todos los eventos para no saltarse el límite enviando otro mensaje. Un evento pendiente puede enviarse después de que cambie el stock: el mensaje muestra la **fecha de detección**, no una garantía de disponibilidad actual.
 

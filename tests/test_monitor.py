@@ -572,5 +572,134 @@ class MonitoringModeTests(unittest.TestCase):
         store.close()
 
 
+class DiscoveryScheduleTests(unittest.TestCase):
+    def test_first_run_is_due(self):
+        store = Store(":memory:")
+        self.assertTrue(store.discovery_due(14400, 900, timestamp=100))
+        store.close()
+
+    def test_success_waits_four_hours(self):
+        store = Store(":memory:")
+        with patch("monitor.store.time.time", return_value=100):
+            store.mark_discovery()
+            store.mark_discovery(successful=True)
+        self.assertFalse(store.discovery_due(14400, 900, timestamp=14499))
+        self.assertTrue(store.discovery_due(14400, 900, timestamp=14500))
+        store.close()
+
+    def test_failed_discovery_retries_with_delay(self):
+        store = Store(":memory:")
+        with patch("monitor.store.time.time", return_value=100):
+            store.mark_discovery()
+        self.assertFalse(store.discovery_due(14400, 900, timestamp=999))
+        self.assertTrue(store.discovery_due(14400, 900, timestamp=1000))
+        store.close()
+
+    def test_success_schedule_survives_restart(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "state.sqlite3"
+            store = Store(path)
+            with patch("monitor.store.time.time", return_value=100):
+                store.mark_discovery()
+                store.mark_discovery(successful=True)
+            store.close()
+            store = Store(path)
+            self.assertFalse(store.discovery_due(14400, 900, timestamp=200))
+            self.assertTrue(store.discovery_due(14400, 900, timestamp=14500))
+            store.close()
+
+    @patch("monitor.app.PRODUCTOS", [])
+    def test_scheduled_cycles_search_only_when_due(self):
+        from monitor.app import scheduled_cycle
+        from monitor.models import SearchResult
+
+        store = Store(":memory:")
+        target = PlazaVea().normalize(raw())
+        adapter = Mock()
+        adapter.search.return_value = SearchResult(products=[target])
+        adapter.details.return_value = target
+        adapter.stock.return_value = Stock("AGOTADO")
+        telegram = Mock()
+        telegram.settings = Settings(token="test", chat_id="1")
+        settings = Settings()
+        with patch("monitor.store.time.time", return_value=100):
+            self.assertTrue(scheduled_cycle(settings, store, adapter, telegram, Mock()))
+        with patch("monitor.store.time.time", return_value=220):
+            self.assertTrue(scheduled_cycle(settings, store, adapter, telegram, Mock()))
+        self.assertEqual(adapter.search.call_count, 1)
+        adapter.details.assert_called_once_with(target)
+        with patch("monitor.store.time.time", return_value=14500):
+            self.assertTrue(scheduled_cycle(settings, store, adapter, telegram, Mock()))
+        self.assertEqual(adapter.search.call_count, 2)
+        store.close()
+
+    @patch("monitor.app.PRODUCTOS", [])
+    def test_partial_search_does_not_claim_success(self):
+        from monitor.app import scheduled_cycle
+        from monitor.models import SearchResult
+
+        store = Store(":memory:")
+        target = PlazaVea().normalize(raw())
+        store.observe(target, Stock("AGOTADO"))
+        adapter = Mock()
+        adapter.search.return_value = SearchResult(
+            products=[], complete=False, errors=["403"]
+        )
+        adapter.details.return_value = target
+        adapter.stock.return_value = Stock("AGOTADO")
+        telegram = Mock()
+        telegram.settings = Settings(token="test", chat_id="1")
+        with patch("monitor.store.time.time", return_value=100):
+            self.assertFalse(
+                scheduled_cycle(Settings(), store, adapter, telegram, Mock())
+            )
+        adapter.details.assert_called_once_with(target)
+        self.assertIsNone(
+            store.db.execute(
+                "SELECT value FROM meta WHERE key='discovery_success'"
+            ).fetchone()
+        )
+        self.assertFalse(store.discovery_due(14400, 900, timestamp=200))
+        self.assertTrue(store.discovery_due(14400, 900, timestamp=1000))
+        store.close()
+
+    @patch("monitor.app.cycle", return_value=True)
+    def test_manual_discovery_overrides_schedule(self, run_cycle):
+        from monitor.app import scheduled_cycle
+
+        store = Store(":memory:")
+        store.mark_discovery(successful=True)
+        scheduled_cycle(Settings(), store, Mock(), Mock(), Mock(), force_discovery=True)
+        self.assertTrue(run_cycle.call_args.kwargs["discover"])
+        store.close()
+
+    @patch("monitor.settings.load_dotenv")
+    def test_configurable_intervals(self, dotenv):
+        with patch.dict(
+            "os.environ",
+            {
+                "MONITOR_INTERVAL": "120",
+                "DISCOVERY_INTERVAL": "14400",
+                "DISCOVERY_RETRY_INTERVAL": "900",
+            },
+            clear=True,
+        ):
+            settings = Settings.load()
+        self.assertEqual(
+            (
+                settings.interval,
+                settings.discovery_interval,
+                settings.discovery_retry_interval,
+            ),
+            (120, 14400, 900),
+        )
+
+    @patch("monitor.settings.load_dotenv")
+    def test_invalid_discovery_interval_is_rejected(self, dotenv):
+        with patch.dict("os.environ", {"DISCOVERY_INTERVAL": "0"}, clear=True):
+            with self.assertRaises(ValueError):
+                Settings.load()
+
+
 if __name__ == "__main__":
     unittest.main()

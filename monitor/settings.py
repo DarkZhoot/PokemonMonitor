@@ -10,7 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 @dataclass
 class Settings:
     data_dir: Path = ROOT / "runtime"
-    interval: int = 600
+    interval: int = 120
+    discovery_interval: int = 14400
+    discovery_retry_interval: int = 900
     timeout: int = 20
     request_delay: float = 1.0
     retries: int = 2
@@ -59,6 +61,8 @@ class Settings:
         s = cls()
         for attr, env, minimum in [
             ("interval", "MONITOR_INTERVAL", 60),
+            ("discovery_interval", "DISCOVERY_INTERVAL", 60),
+            ("discovery_retry_interval", "DISCOVERY_RETRY_INTERVAL", 60),
             ("timeout", "MONITOR_TIMEOUT", 1),
             ("retries", "MONITOR_RETRIES", 0),
             ("telegram_retries", "TELEGRAM_RETRIES", 1),
@@ -70,6 +74,8 @@ class Settings:
                 or value
                 > {
                     "interval": 86400,
+                    "discovery_interval": 604800,
+                    "discovery_retry_interval": 86400,
                     "timeout": 120,
                     "retries": 5,
                     "telegram_retries": 10,
