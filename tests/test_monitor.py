@@ -493,7 +493,7 @@ class RegressionTests(unittest.TestCase):
         adapter.search.return_value = SearchResult(products=[p])
         adapter.details.return_value = p
         adapter.stock.return_value = Stock("DISPONIBLE", 25, "PEN")
-        self.assertTrue(cycle(s, store, adapter, t, Mock()))
+        self.assertTrue(cycle(s, store, adapter, t, Mock(), discover=True))
         self.assertTrue(cycle(s, store, adapter, t, Mock()))
         self.assertEqual(t.session.post.call_count, 1)
         store.close()
@@ -508,6 +508,68 @@ class RegressionTests(unittest.TestCase):
                 store.migrate(root)
             self.assertEqual(store.products(), [])
             store.close()
+
+
+class MonitoringModeTests(unittest.TestCase):
+    @patch("monitor.app.PRODUCTOS", [])
+    def test_normal_mode_never_searches_or_checks_pending(self):
+        store = Store(":memory:")
+        target = PlazaVea().normalize(raw())
+        pending = copy.deepcopy(target)
+        pending.id = "pending"
+        pending.url = "https://www.plazavea.com.pe/pending/p"
+        pending.classification = "POR_VERIFICAR"
+        store.observe(target, Stock("AGOTADO"))
+        store.observe(pending, Stock())
+        adapter = Mock()
+        adapter.details.return_value = target
+        adapter.stock.return_value = Stock("AGOTADO")
+        telegram = Mock()
+        telegram.settings = Settings(token="test", chat_id="1")
+        self.assertTrue(cycle(Settings(), store, adapter, telegram, Mock()))
+        adapter.search.assert_not_called()
+        adapter.details.assert_called_once_with(target)
+        self.assertEqual(len(store.products()), 2)
+        store.close()
+
+    @patch("monitor.app.PRODUCTOS", [])
+    def test_discovery_reuses_fresh_details_and_preserves_pending(self):
+        from monitor.models import SearchResult
+
+        store = Store(":memory:")
+        target = PlazaVea().normalize(raw())
+        pending = copy.deepcopy(target)
+        pending.id = "pending"
+        pending.classification = "POR_VERIFICAR"
+        pending.url = "https://www.plazavea.com.pe/pending/p"
+        adapter = Mock()
+        adapter.search.return_value = SearchResult(products=[target, pending])
+        adapter.stock.return_value = Stock("AGOTADO")
+        telegram = Mock()
+        telegram.settings = Settings(token="test", chat_id="1")
+        self.assertTrue(
+            cycle(Settings(), store, adapter, telegram, Mock(), discover=True)
+        )
+        adapter.search.assert_called_once()
+        adapter.details.assert_not_called()
+        adapter.stock.assert_called_once_with(target)
+        self.assertEqual(len(store.products()), 2)
+        store.close()
+
+    @patch("monitor.app.PRODUCTOS", [])
+    def test_empty_tracking_gives_actionable_message(self):
+        store = Store(":memory:")
+        telegram = Mock()
+        telegram.settings = Settings(token="test", chat_id="1")
+        adapter = Mock()
+        log = Mock()
+        self.assertFalse(cycle(Settings(), store, adapter, telegram, log))
+        adapter.search.assert_not_called()
+        adapter.details.assert_not_called()
+        self.assertTrue(
+            any(call.args[0] == "no_targets" for call in log.call_args_list)
+        )
+        store.close()
 
 
 if __name__ == "__main__":

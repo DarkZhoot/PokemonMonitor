@@ -38,36 +38,52 @@ def configure(settings):
     return log
 
 
-def cycle(settings, store, adapter, telegram, log):
+def cycle(settings, store, adapter, telegram, log, *, discover=False):
+    started = time.monotonic()
     healthy = True
     deliver(store, telegram, log)
-    try:
-        result = adapter.search()
-    except Exception:
-        log("search_failure", error="Error inesperado del adaptador")
-        result = None
-        healthy = False
-    if result and not result.complete:
-        healthy = False
-        log("search_incomplete", errors=result.errors)
-    products = {p.key: p for p in store.products()}
-    # Seed products do not override already validated stable identities by URL.
-    urls = {p.url for p in products.values()}
+    result = None
+    if discover:
+        try:
+            result = adapter.search()
+        except Exception:
+            log("search_failure", error="Error inesperado del adaptador")
+            healthy = False
+        if result and not result.complete:
+            healthy = False
+            log("search_incomplete", errors=result.errors)
+    saved = store.products()
+    # Normal polling visits confirmed targets only; uncertain catalog entries stay stored.
+    products = {p.key: p for p in saved if p.classification == "CANDIDATO"}
+    saved_by_url = {p.url: p for p in saved}
     for raw in PRODUCTOS + settings.products:
         url = normalize_url(raw["url"])
-        if url in urls:
-            continue
-        p = Product(str(raw.get("id") or "url:" + url), raw.get("nombre", ""), url)
+        p = saved_by_url.get(url)
+        if p is None:
+            p = Product(str(raw.get("id") or "url:" + url), raw.get("nombre", ""), url)
         products[p.key] = p
-        urls.add(url)
+    fresh = set()
     if result:
         for p in result.products:
-            # Canonical ID/URL are handled transactionally by Store.
+            if p.classification != "CANDIDATO":
+                # Discovery metadata is sufficient to retain a pending entry, without
+                # paying for another detail request or changing any known stock.
+                store.observe(p, Stock(detail="Idioma o edición pendiente/excluida"))
+                products.pop(p.key, None)
+                continue
             products[p.key] = p
+            fresh.add(p.key)
+    if not products:
+        log(
+            "no_targets",
+            instruction="Ejecuta --discover o configura productos específicos",
+        )
+        healthy = False
     seen = set()
     for product in products.values():
+        product_started = time.monotonic()
         try:
-            p = adapter.details(product)
+            p = product if product.key in fresh else adapter.details(product)
             if p.key in seen:
                 continue
             seen.add(p.key)
@@ -96,6 +112,8 @@ def cycle(settings, store, adapter, telegram, log):
             state=stock.state,
             detail=stock.detail,
             event_type=event,
+            url=p.url,
+            duration_seconds=round(time.monotonic() - product_started, 3),
         )
     delivered = deliver(store, telegram, log)
     failed = store.db.execute(
@@ -110,6 +128,9 @@ def cycle(settings, store, adapter, telegram, log):
         delivery_ok=delivered,
         failed_events=failed,
         pending_events=pending,
+        mode="discover" if discover else "monitor",
+        checked_products=len(seen),
+        duration_seconds=round(time.monotonic() - started, 3),
     )
     return healthy and delivered and not failed and not pending
 
@@ -131,6 +152,16 @@ def main():
         action="store_true",
         help="Reactivar eventos fallidos para próximo ciclo",
     )
+    group.add_argument(
+        "--discover",
+        action="store_true",
+        help="Buscar nuevas publicaciones una vez y guardar candidatos/enlaces",
+    )
+    group.add_argument(
+        "--list-products",
+        action="store_true",
+        help="Mostrar candidatos guardados y sus enlaces, sin consultar la tienda",
+    )
     args = parser.parse_args()
     settings = Settings.load()
     log = configure(settings)
@@ -139,6 +170,19 @@ def main():
             store = Store(settings.data_dir / "monitor.sqlite3")
             try:
                 store.migrate(ROOT)
+                if args.list_products:
+                    print(
+                        json.dumps(
+                            [
+                                {"id": p.id, "nombre": p.name, "url": p.url}
+                                for p in store.products()
+                                if p.classification == "CANDIDATO"
+                            ],
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                    )
+                    return 0
                 telegram = Telegram(settings)
                 if args.telegram_test:
                     ok, _, error, _ = telegram.send(
@@ -164,7 +208,14 @@ def main():
                 adapter = PlazaVea(settings)
                 while True:
                     try:
-                        ok = cycle(settings, store, adapter, telegram, log)
+                        ok = cycle(
+                            settings,
+                            store,
+                            adapter,
+                            telegram,
+                            log,
+                            discover=args.discover,
+                        )
                     except Exception:
                         log(
                             "cycle_failed",

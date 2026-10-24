@@ -28,6 +28,25 @@ Copy-Item .env.example .env
 
 Edita `.env` localmente; nunca lo subas. Las variables ya exportadas prevalecen sobre `.env`. No pegues tokens en comandos, capturas, issues ni logs. En Linux limita el acceso con `chmod 600 .env`.
 
+## Seguimiento rápido con descubrimiento manual
+
+`--once` y `--loop` **ya no hacen búsquedas generales**. Solo actualizan detalles y stock de los candidatos guardados, además de productos configurados explícitamente. Los cientos de publicaciones pendientes se conservan pero no se consultan en cada ciclo.
+
+```powershell
+# Solo cuando quieras descubrir productos nuevos (primera vez si no hay candidatos)
+.\.venv\Scripts\python.exe main.py --discover
+# Ver nombres y enlaces directos guardados; no usa Internet
+.\.venv\Scripts\python.exe main.py --list-products
+# Seguir solo los objetivos guardados
+.\.venv\Scripts\python.exe main.py --loop
+```
+
+Detén el bucle con Ctrl+C antes de ejecutar `--discover`, y reinícialo después. El bloqueo impide ejecutar ambos simultáneamente. La búsqueda manual utiliza los términos configurados, guarda candidatos y pendientes, y puede enviar alertas de candidatos nuevos disponibles. Reutiliza los detalles completos de búsqueda para evitar otra consulta por cada resultado. Los pendientes solo se vuelven a evaluar si reaparecen en un descubrimiento o están configurados explícitamente. No borres la base existente: sus candidatos y transiciones se reutilizan sin reenviar avisos por disponibilidad continua.
+
+Para revisar aproximadamente cada dos minutos **después de terminar el ciclo**, usa `MONITOR_INTERVAL=120`. Se mantiene la pausa entre peticiones y la gestión de límites; no garantiza un tiempo fijo ni ausencia de bloqueos. `product_checked.duration_seconds` mide el procesamiento del producto (incluye red, pausas, persistencia y un eventual envío); `cycle_finished.duration_seconds` mide el ciclo completo. No son tiempos exclusivos de la respuesta HTTP.
+
+En Linux usa los mismos argumentos con `.venv/bin/python`. Los ejemplos de cron y Programador de tareas ejecutan ahora solamente seguimiento. Para detectar nuevas publicaciones debes lanzar expresamente `--discover`.
+
 ## Configuración
 
 | Variable | Uso / valor predeterminado |
@@ -109,7 +128,7 @@ Debe llegar **PRUEBA — SIN COMPRA**, con fecha de Lima y botón para abrir Pla
 
 En Windows sustituye `.venv/bin/python` por `.venv\Scripts\python.exe`.
 
-Salidas: **0** ciclo sin incidencias detectadas; **1** errores, stock desconocido, envío fallido o configuración incompleta; **2** otra ejecución mantiene el bloqueo. Un resultado parcial puede haber actualizado productos y enviado algunos avisos; revisa el log. Los candidatos pendientes también degradan el estado del ciclo. `--loop` continúa ante fallos de consultas/envíos, con intervalo; errores de configuración o historial impiden el inicio y deben corregirse.
+Salidas: **0** ciclo sin incidencias detectadas; **1** errores, stock desconocido, envío fallido o configuración incompleta; **2** otra ejecución mantiene el bloqueo. Un resultado parcial puede haber actualizado productos y enviado algunos avisos; revisa el log. Los candidatos pendientes explícitamente consultados también degradan el estado del ciclo. `--loop` continúa ante fallos de consultas/envíos, con intervalo; errores de configuración o historial impiden el inicio y deben corregirse.
 
 Si cambias el contexto de vendedor, variante o entrega, utiliza un directorio de datos independiente: los estados de contextos distintos no deben compararse como una reposición.
 
@@ -164,7 +183,7 @@ Tipos de alerta:
 - `REPOSICION`: último estado concluyente agotado y ahora disponible, aunque haya errores intermedios.
 - `DISPONIBILIDAD_CONFIRMADA`: producto registrado sin estado concluyente previo y ahora disponible.
 
-Una pérdida temporal de conectividad no borra el último estado concluyente ni genera por sí sola otro aviso al recuperar una disponibilidad ya conocida. Los candidatos nuevos con stock desconocido y los pendientes de idioma/edición se conservan para futuras revisiones. Cambiar palabras clave no borra el histórico. Para retirar definitivamente un producto se necesita una futura opción de exclusión por ID o gestión de bajas; por ahora las exclusiones de texto impiden sus alertas al revalidar detalles.
+Una pérdida temporal de conectividad no borra el último estado concluyente ni genera por sí sola otro aviso al recuperar una disponibilidad ya conocida. Los candidatos nuevos con stock desconocido y los pendientes de idioma/edición se conservan para futuras revisiones. Cambiar palabras clave solo afecta al próximo `--discover` y no borra el histórico. Para retirar definitivamente un producto se necesita una futura opción de exclusión por ID o gestión de bajas; por ahora las exclusiones de texto impiden sus alertas al revalidar detalles.
 
 Las alertas se intentan enviar al detectar el evento, sin esperar a terminar de revisar todos los productos. La cola registra `pending`, `sent`, `failed`, número de intentos, próxima fecha y error redactado. `--loop` procesa reintentos aproximadamente cada 5 segundos; en cron, solo en las próximas ejecuciones. Los 429 respetan `retry_after`; fallos permanentes o intentos agotados requieren `--retry-failed`. No se consumen intentos si faltan credenciales. Una espera impuesta por Telegram se comparte entre todos los eventos para no saltarse el límite enviando otro mensaje. Un evento pendiente puede enviarse después de que cambie el stock: el mensaje muestra la **fecha de detección**, no una garantía de disponibilidad actual.
 
