@@ -14,6 +14,8 @@ from monitor.telegram import Telegram, deliver
 from tiendas.plaza_vea import PlazaVea
 from tiendas.oechsle import Oechsle
 from tiendas.ripley import Ripley
+from monitor.ripley_background import RipleyDiscoveryManager
+from tiendas.ripley_discovery import ExpandedRipley
 
 
 def configure(settings):
@@ -60,6 +62,8 @@ def cycle(
                 error="Error inesperado del adaptador",
             )
             healthy = False
+        if result is not None and hasattr(result, "stats"):
+            log("ripley_sources_summary", **result.stats)
         if result and not result.complete:
             healthy = False
             log("search_incomplete", retailer=retailer, errors=result.errors)
@@ -196,10 +200,37 @@ def scheduled_cycle(
     )
 
 
-def run_retailers(settings, store, adapters, telegram, log, *, force_discovery=False):
+def run_retailers(
+    settings,
+    store,
+    adapters,
+    telegram,
+    log,
+    *,
+    force_discovery=False,
+    ripley_discovery=None,
+):
     outcomes = []
     for retailer, (retailer_settings, adapter) in adapters.items():
         try:
+            if retailer == "Ripley" and ripley_discovery is not None:
+                ripley_discovery.tick(store, log)
+                if ripley_discovery.blocked(store):
+                    log("ripley_background_rate_limited")
+                    outcomes.append(False)
+                else:
+                    outcomes.append(
+                        cycle(
+                            retailer_settings,
+                            store,
+                            adapter,
+                            telegram,
+                            log,
+                            discover=False,
+                            retailer=retailer,
+                        )
+                    )
+                continue
             outcomes.append(
                 scheduled_cycle(
                     retailer_settings,
@@ -259,6 +290,7 @@ def main():
     try:
         with exclusive(settings.data_dir / "monitor.lock"):
             store = Store(settings.data_dir / "monitor.sqlite3")
+            manager = None
             try:
                 store.migrate(ROOT)
                 enforce_ripley_scope(store, log)
@@ -315,7 +347,12 @@ def main():
                 ]:
                     if slug in enabled:
                         selected = settings.for_retailer(slug)
-                        adapters[name] = (selected, factory(selected))
+                        if slug == "ripley" and args.discover:
+                            adapters[name] = (selected, ExpandedRipley(selected))
+                        else:
+                            adapters[name] = (selected, factory(selected))
+                if "Ripley" in adapters and not args.discover:
+                    manager = RipleyDiscoveryManager(settings)
                 while True:
                     try:
                         ok = run_retailers(
@@ -325,6 +362,7 @@ def main():
                             telegram,
                             log,
                             force_discovery=args.discover,
+                            ripley_discovery=manager,
                         )
                     except Exception:
                         log(
@@ -340,11 +378,18 @@ def main():
                     end = time.monotonic() + settings.interval
                     while time.monotonic() < end:
                         time.sleep(min(5, max(0, end - time.monotonic())))
+                        if manager:
+                            try:
+                                manager.tick(store, log)
+                            except Exception:
+                                log("ripley_background_tick_failed")
                         try:
                             deliver(store, telegram, log)
                         except Exception:
                             log("delivery_failure", error="No se pudo procesar la cola")
             finally:
+                if manager:
+                    manager.close(detach=not args.loop)
                 store.close()
     except AlreadyRunning:
         log("already_running")

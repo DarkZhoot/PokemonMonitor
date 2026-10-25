@@ -82,9 +82,44 @@ Después de detener el proceso anterior con Ctrl+C:
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-No cambies el token ni el chat ID del grupo. Ripley tiene sus propios estados y reloj persistente: el primer descubrimiento no reinicia el de Plaza Vea ni Oechsle. Los candidatos se consultan durante cada ciclo rápido y las búsquedas generales se repiten aproximadamente cada cuatro horas por tienda. Los reintentos y el bloqueo son compartidos por el proceso; las tiendas se procesan secuencialmente, sin prometer periodos exactos ni ausencia de límites. Para desactivar Ripley temporalmente, usa `RETAILERS=plazavea,oechsle`.
+No cambies el token ni el chat ID del grupo. Ripley tiene sus propios estados y reloj persistente: el primer descubrimiento no reinicia el de Plaza Vea ni Oechsle. Los candidatos se consultan durante cada ciclo rápido y las búsquedas generales se repiten aproximadamente cada cuatro horas por tienda. Los reintentos y el bloqueo son compartidos por el proceso; el seguimiento de las tiendas se procesa secuencialmente y el descubrimiento ampliado de Ripley va en segundo plano, sin prometer periodos exactos ni ausencia de límites. Para desactivar Ripley temporalmente, usa `RETAILERS=plazavea,oechsle`.
 
 Un producto específico de Ripley puede configurarse en `MONITOR_PRODUCTS_JSON` con `"tienda":"Ripley"` y el enlace real a su ficha. Se revalida su identidad, vendedor Ripley, idioma y edición; tampoco se aceptan publicaciones de marketplace añadidas manualmente.
+
+## Descubrimiento ampliado de Ripley, separado de Plaza Vea
+
+La búsqueda VTEX de Plaza Vea y la de Oechsle conservan sus adaptadores, consultas y relojes. **Solo Ripley** añade búsquedas amplias (`pokemon`, `pokemon tcg`) a sus términos específicos, sitemaps públicos de productos propios, índices de categorías y páginas de marca/categoría relacionadas con Pokémon. No se rastrean sitemaps 3P ni se enumeran números de producto. El rastreo adicional respeta `robots.txt`, verifica el dominio en cada enlace/redirección y vuelve a confirmar vendedor, idioma y edición en la ficha. Un candidato agotado también se conserva.
+
+En `--loop` la exploración de Ripley se ejecuta en **otro proceso**. El proceso principal continúa el seguimiento y es el único que modifica SQLite o envía Telegram. El explorador solo produce un resultado JSON local; no recibe token ni chat ID en su configuración ni abre la base. Se importa el inventario de candidatos sin reproducir su stock antiguo: el monitor vuelve a consultar la ficha antes de decidir una alerta. Así se evita una segunda cola de envíos y escrituras simultáneas.
+
+No necesitas nuevas variables ni otra consola:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --loop
+```
+
+Al actualizar se programa una primera exploración ampliada de Ripley; no se reinician los relojes de Plaza Vea y Oechsle. Luego se repite cada cuatro horas. En `--once`/cron se puede lanzar el explorador y terminar el ciclo rápido: el siguiente proceso recoge el resultado. La exclusión `worker.lock` impide exploradores simultáneos; si se detiene un `--loop`, se termina su explorador. Un proceso lanzado por `--once` termina por su propio límite aunque el padre haya salido. Los resultados completos sobreviven a reinicios y los caducados se descartan.
+
+Para una revisión explícita solo de Ripley, `--discover` ejecuta la exploración ampliada en primer plano y puede tardar hasta el presupuesto configurado (más la comprobación de sus candidatos). Detén el bucle antes de usarlo:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --retailer ripley --discover
+.\.venv\Scripts\python.exe main.py --retailer ripley --list-products
+```
+
+Límites opcionales en `.env`:
+
+```dotenv
+RIPLEY_DISCOVERY_MAX_SECONDS=180
+RIPLEY_DISCOVERY_MAX_REQUESTS=80
+RIPLEY_DISCOVERY_MAX_PRODUCTS=60
+```
+
+También se limita cada documento a 32 MiB, el total descargado a 96 MiB, los sitemaps a 12, las páginas de navegación a 8 y el resultado entre procesos a 8 MiB. El explorador de fondo espera al menos dos segundos entre peticiones. Alcanzar un límite se informa como **cobertura parcial**, conserva lo obtenido y espera el intervalo normal de cuatro horas; no se presenta como catálogo exhaustivo. Los fallos de red/formato reintentan tras `DISCOVERY_RETRY_INTERVAL`, y un 403/429 detiene las peticiones del trabajo, conservando la espera indicada cuando exista. El proceso tiene un límite de seguridad independiente de los timeouts HTTP.
+
+Los eventos `ripley_background_started` y `ripley_background_imported` aparecen en `runtime/monitor.jsonl`. Sus estadísticas incluyen sitemaps, páginas, enlaces y fichas verificadas. El resumen del proceso separado queda en `runtime/ripley-discovery/worker.log`; sus archivos de intercambio no contienen las credenciales y están excluidos de Git. El seguimiento de stock continúa en la secuencia habitual: no se promete un periodo exacto ni cero consumo de CPU/red, pero el monitor no espera a que termine el rastreo ampliado.
+
+**Limitación comprobada:** la ETB inglesa `2032376641981P` no apareció en las búsquedas ni en el sitemap 1P revisado (45.489 enlaces). La prueba real de exploración adicional examinó 12 sitemaps, 8 páginas de navegación y 43 fichas; tampoco descubrió esa ETB. No se ha añadido su enlace como una semilla oculta ni se afirma haber resuelto ese caso. Para cubrir fichas que ningún índice público de Ripley publica hace falta una fuente externa autorizada (no configurada actualmente). No se raspa Google ni se inventa acceso a una API de búsqueda externa.
 
 ## Instalación
 

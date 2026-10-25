@@ -61,6 +61,9 @@ class Settings:
     oechsle_seller_id: str = ""
     oechsle_sku_id: str = ""
 
+    ripley_discovery_seconds: int = 180
+    ripley_discovery_requests: int = 80
+    ripley_discovery_products: int = 60
     ripley_context_confirmed: bool = True
     ripley_postal_code: str = ""
     ripley_sales_channel: str = ""
@@ -113,6 +116,15 @@ class Settings:
                     "pages": 50,
                 }[attr]
             ):
+                raise ValueError(f"{env}: fuera de rango")
+            setattr(s, attr, value)
+        for attr, env, minimum, maximum in [
+            ("ripley_discovery_seconds", "RIPLEY_DISCOVERY_MAX_SECONDS", 30, 900),
+            ("ripley_discovery_requests", "RIPLEY_DISCOVERY_MAX_REQUESTS", 10, 300),
+            ("ripley_discovery_products", "RIPLEY_DISCOVERY_MAX_PRODUCTS", 5, 200),
+        ]:
+            value = int(os.getenv(env, getattr(s, attr)))
+            if not minimum <= value <= maximum:
                 raise ValueError(f"{env}: fuera de rango")
             setattr(s, attr, value)
         s.request_delay = float(os.getenv("MONITOR_REQUEST_DELAY", "1"))

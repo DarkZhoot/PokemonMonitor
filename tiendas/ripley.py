@@ -206,6 +206,12 @@ class Ripley:
             raise ValueError("Producto de otra tienda")
         url = normalize_url(product.url, "Ripley")
         page = CatalogHTML(self.client.get(url, as_text=True))
+        return self.details_from_page(product, page)
+
+    def details_from_page(self, product, page):
+        if product.retailer != "Ripley":
+            raise ValueError("Producto de otra tienda")
+        url = normalize_url(product.url, "Ripley")
         matches = {}
         for raw in page.products:
             # Review-only Product nodes share @id but contain no product/offer data.
