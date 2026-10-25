@@ -1,4 +1,4 @@
-"""Falabella: búsqueda pública filtrada y ofertas schema.org de venta propia.
+"""Falabella: listado Next.js público y ofertas schema.org de venta propia.
 
 Sin API privada ni ejecución de JavaScript. Un HTML no interpretable se declara
 incompleto; jamás se interpreta un bloqueo o dato ausente como stock agotado.
@@ -44,6 +44,60 @@ class Falabella:
             )
         )
 
+    def native_listing(self, page):
+        data = page.next_data
+        if not isinstance(data, dict):
+            return None
+        props = data.get("props", {}).get("pageProps", {})
+        if not isinstance(props, dict) or "results" not in props:
+            return None
+        results, pagination = props["results"], props.get("pagination")
+        if not isinstance(results, list) or not isinstance(pagination, dict):
+            raise ValueError("Listado Next.js Falabella incompleto")
+        for name in ("count", "perPage", "currentPage"):
+            value = pagination.get(name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError("Paginación Falabella no interpretable")
+        if (
+            pagination["count"] < 0
+            or pagination["perPage"] < 1
+            or pagination["currentPage"] < 1
+            or len(results) > pagination["perPage"]
+            or len(results) > pagination["count"]
+        ):
+            raise ValueError("Paginación Falabella contradictoria")
+        if not results and pagination["count"] != 0:
+            raise ValueError("Resultados ausentes con conteo no vacío")
+        return results, pagination
+
+    def normalize_native(self, raw):
+        if not isinstance(raw, dict):
+            raise ValueError("Tarjeta Falabella inválida")
+        schema = {
+            "url": raw.get("url"),
+            "name": raw.get("displayName", ""),
+            "brand": raw.get("brand", ""),
+        }
+        seller_id, seller_name = raw.get("sellerId"), raw.get("sellerName")
+        # These identifiers were observed in the public Peruvian listing.
+        # The search filter alone does not establish the card's seller.
+        if (
+            seller_id == "FALABELLA_PERU"
+            and isinstance(seller_name, str)
+            and seller_name.strip().casefold() in ("falabella", "saga falabella")
+        ):
+            schema["offers"] = {"seller": {"name": "Falabella"}}
+        elif isinstance(seller_id, str) and seller_id and seller_id != "FALABELLA_PERU":
+            schema["offers"] = {"seller": {"name": "Marketplace"}}
+        product = self.normalize(schema)
+        identifier = raw.get("productId")
+        if not isinstance(identifier, str) or identifier != product.id:
+            raise ValueError("Identificador no coincide con la URL Falabella")
+        product.raw["native_listing"] = {
+            k: raw.get(k) for k in ("productId", "skuId", "sellerId", "sellerName")
+        }
+        return product
+
     def details(self, product):
         if product.retailer != self.retailer:
             raise ValueError("Producto de otra tienda")
@@ -88,8 +142,13 @@ class Falabella:
                     page = CatalogHTML(
                         self.client.get(SEARCH_URL, params=params, as_text=True)
                     )
-                    cards = list(page.products)
-                    for href, name in page.links:
+                    native = self.native_listing(page)
+                    if native is not None and native[1]["currentPage"] != number:
+                        raise ValueError("Falabella devolvió otra página")
+                    cards = (
+                        list(native[0]) if native is not None else list(page.products)
+                    )
+                    for href, name in [] if native is not None else page.links:
                         try:
                             link = normalize_url(urljoin(BASE_URL, href), self.retailer)
                         except (ValueError, TypeError):
@@ -101,9 +160,35 @@ class Falabella:
                             cards.append({"url": link, "name": name})
                     urls = set()
                     for raw in cards:
+                        if native is not None and isinstance(raw, dict):
+                            # Falabella may broaden a failed query into toys/clothing.
+                            # Avoid fetching unrelated detail pages in every cycle.
+                            text = normalizar(
+                                str(raw.get("displayName", ""))
+                                + " "
+                                + str(raw.get("brand", ""))
+                            )
+                            if not re.search(r"\bpokemon\b", text) or not re.search(
+                                r"\b(tcg|trading|cartas|booster|deck|etb|anniversary|aniversario)\b|elite trainer",
+                                text,
+                            ):
+                                continue
                         try:
-                            p = self.normalize(raw)
+                            p = (
+                                self.normalize_native(raw)
+                                if native is not None
+                                else self.normalize(raw)
+                            )
                         except (ValueError, TypeError, AttributeError):
+                            if native is not None:
+                                result.complete = False
+                                if (
+                                    "Tarjeta Falabella sin identidad confirmable"
+                                    not in result.errors
+                                ):
+                                    result.errors.append(
+                                        "Tarjeta Falabella sin identidad confirmable"
+                                    )
                             continue
                         urls.add(p.url)
                         if p.classification == "DESCARTADO":
@@ -132,16 +217,36 @@ class Falabella:
                         r"no encontramos (?:resultados|productos)|no se encontraron (?:resultados|productos)|\b0 resultados\b|sin resultados",
                         normalizar(" ".join(page.text)),
                     )
-                    if not urls and not empty:
+                    if native is not None:
+                        empty = native[1]["count"] == 0
+                    if not urls and not empty and native is None:
                         raise ValueError(
                             "HTML sin listado interpretable; no se confirma búsqueda vacía"
                         )
-                    fingerprint = tuple(sorted(urls))
-                    if urls and fingerprint in seen_pages:
+                    fingerprint = (
+                        tuple(
+                            sorted(
+                                str(x.get("url", ""))
+                                for x in native[0]
+                                if isinstance(x, dict)
+                            )
+                        )
+                        if native is not None
+                        else tuple(sorted(urls))
+                    )
+                    if fingerprint and fingerprint in seen_pages:
                         raise ValueError("Paginación repetida; cobertura incompleta")
                     seen_pages.add(fingerprint)
-                    next_page = False
-                    for href in page.next_links + [href for href, _ in page.links]:
+                    next_page = (
+                        (native[1]["count"] > number * native[1]["perPage"])
+                        if native is not None
+                        else False
+                    )
+                    for href in (
+                        []
+                        if native is not None
+                        else page.next_links + [href for href, _ in page.links]
+                    ):
                         parsed = urlsplit(urljoin(SEARCH_URL, href))
                         query = parse_qs(parsed.query)
                         if (

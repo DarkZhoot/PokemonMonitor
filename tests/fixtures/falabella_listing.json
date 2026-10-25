@@ -1,0 +1,41 @@
+{
+  "props": {
+    "pageProps": {
+      "results": [
+        {
+          "productId": "80057935",
+          "skuId": "80057935",
+          "displayName": "Chaos Rising Pack X3 Booster Blister en Inglés TCG",
+          "url": "https://www.falabella.com.pe/falabella-pe/product/80057935/tcg-chaos-pack-x3-booster-ing",
+          "brand": "POKEMON",
+          "sellerId": "FALABELLA_PERU",
+          "sellerName": "Falabella"
+        },
+        {
+          "productId": "80057940",
+          "skuId": "80057940",
+          "displayName": "Chaos Rising Pack X3 Booster Blister en Español TCG",
+          "url": "https://www.falabella.com.pe/falabella-pe/product/80057940/tcg-caos-cre-pack-x3-sobre-esp",
+          "brand": "POKEMON",
+          "sellerId": "FALABELLA_PERU",
+          "sellerName": "Falabella"
+        }
+      ],
+      "pagination": {
+        "count": 2,
+        "perPage": 48,
+        "totalPerPage": 2,
+        "currentPage": 1
+      },
+      "appliedFacets": [
+        {
+          "facetType": "f.derived.variant.sellerId",
+          "facetValue": "FALABELLA",
+          "title": "FALABELLA",
+          "url": "facetSelected=true",
+          "visible": true
+        }
+      ]
+    }
+  }
+}

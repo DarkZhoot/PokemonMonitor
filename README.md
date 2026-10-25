@@ -471,13 +471,31 @@ solo no prueba stock. No se confirma entrega por ubicación y los filtros opcion
 `FALABELLA_POSTAL_CODE`, `FALABELLA_SALES_CHANNEL`, `FALABELLA_SELLER_ID` y
 `FALABELLA_SKU_ID` deben permanecer vacíos.
 
-**Validación pendiente contra el sitio real:** en este entorno la conexión HTTPS
-fue rechazada por el proxy antes de recibir respuesta de Falabella. Las pruebas
-son fixtures simuladas, no evidencia del formato HTML actual ni de cobertura
-completa. No se implementó un parser especulativo de APIs privadas o de estados
-JavaScript. Si Falabella solo expone los datos con JavaScript o en otro formato,
-el ciclo informará búsqueda incompleta y será necesario adaptar el parser con
-una respuesta real. No se garantiza descubrir publicaciones que el buscador omite.
+El listado actual está en `__NEXT_DATA__.props.pageProps.results`, no en
+JSON-LD ni en enlaces HTML de tarjetas. La paginación se lee de `pagination`
+(`count`, `perPage`, `currentPage`); no se da por completa una página repetida,
+un conteo no vacío sin tarjetas o un límite de páginas alcanzado. Cada tarjeta
+se vincula a su URL mediante `productId`; las ventas propias observadas usan
+`sellerId=FALABELLA_PERU` y `sellerName=Falabella`. El filtro de la búsqueda no
+sustituye esa comprobación. Los precios y etiquetas de envío de las tarjetas no
+se interpretan como stock: se consulta la ficha y sus ofertas explícitas.
+
+El 25 de octubre de 2026 se comprobó HTTP 200 y la estructura real de listado y
+ficha. Las pruebas incluyen fixtures mínimas derivadas de esas respuestas, sin
+cookies, datos de sesión, reseñas ni configuraciones internas del sitio. La consulta
+`pokemon tcg 30` devolvió dos productos Chaos Rising, sin confirmar edición 30;
+`pokemon tcg ingles` devolvió cinco tarjetas vendidas por Falabella. No se relajan
+los filtros de edición/idioma para convertir esos resultados en candidatos.
+La búsqueda completa de los cuatro términos, con pausa de 0.5 s y sin reintentos,
+terminó en 32.4 s, `complete=true`, sin errores y nueve entradas `POR_VERIFICAR`;
+ninguna confirmó todos los requisitos. Es una medición orientativa. Cuando el
+buscador amplía términos a juguetes o ropa (se observaron 612 resultados para
+`pokemon 30 aniversario`), se recorre la paginación pero no se consultan fichas
+ajenas a Pokémon y a señales de TCG/cartas/aniversario. Esto evita cientos de
+peticiones a productos irrelevantes sin ocultar candidatos de páginas posteriores.
+No se garantiza descubrir publicaciones que el buscador omite ni disponibilidad
+de entrega por ubicación. Se conserva el lector schema.org para variantes de HTML
+compatibles, y los errores de lectura siguen indicando búsqueda incompleta.
 
 Para comprobar solamente esta tienda en Windows, sin iniciar el bucle:
 

@@ -263,3 +263,162 @@ class FalabellaTests(unittest.TestCase):
         self.assertTrue(result.complete)
         self.assertEqual(result.products, [])
         self.assertEqual(self.client.get.call_count, 1)
+
+    def native_html(self, results=None, count=None, page=1, per_page=48):
+        data = json.loads(
+            (Path(__file__).parent / "fixtures/falabella_listing.json").read_text()
+        )
+        props = data["props"]["pageProps"]
+        if results is not None:
+            props["results"] = results
+        props["pagination"].update(
+            count=len(props["results"]) if count is None else count,
+            currentPage=page,
+            perPage=per_page,
+        )
+        return (
+            '<script id="__NEXT_DATA__" type="application/json">'
+            + json.dumps(data)
+            + "</script>"
+        )
+
+    def real_card(self):
+        data = json.loads(
+            (Path(__file__).parent / "fixtures/falabella_listing.json").read_text()
+        )
+        return data["props"]["pageProps"]["results"][0]
+
+    def test_observed_next_listing_and_product_regression(self):
+        detail = json.loads(
+            (Path(__file__).parent / "fixtures/falabella_product.json").read_text()
+        )
+        self.client.get.side_effect = [self.native_html(), html(detail)]
+        r = self.adapter.search()
+        self.assertTrue(r.complete, r.errors)
+        self.assertEqual(len(r.products), 1)  # Spanish card skipped before detail.
+        self.assertEqual(r.products[0].id, "80057935")
+        self.assertEqual(
+            r.products[0].classification, "POR_VERIFICAR"
+        )  # Not 30th anniversary.
+        self.assertEqual(self.adapter.stock(r.products[0]).state, "DISPONIBLE")
+
+    def test_native_pagination_without_anchor_links(self):
+        first = self.real_card()
+        first["displayName"] = NAME
+        second = dict(
+            first, productId="999999999", url=URL.replace("123456789", "999999999")
+        )
+        detail = raw()
+        detail["url"] = first["url"]
+        other = raw()
+        other["url"] = second["url"]
+        self.client.get.side_effect = [
+            self.native_html([first], count=2, per_page=1),
+            html(detail),
+            self.native_html([second], count=2, page=2, per_page=1),
+            html(other),
+        ]
+        r = self.adapter.search()
+        self.assertTrue(r.complete, r.errors)
+        self.assertEqual(len(r.products), 2)
+        for c in self.client.get.call_args_list:
+            if "params" in c.kwargs:
+                self.assertEqual(c.kwargs["params"][SELLER_PARAM], "FALABELLA")
+
+    def test_native_marketplace_excluded_even_if_search_filtered(self):
+        card = dict(
+            self.real_card(), sellerId="OTHER", sellerName="Falabella", displayName=NAME
+        )
+        self.client.get.return_value = self.native_html([card])
+        r = self.adapter.search()
+        self.assertTrue(r.complete)
+        self.assertEqual(r.products, [])
+        self.assertEqual(self.client.get.call_count, 1)
+
+    def test_native_missing_seller_is_not_confirmation(self):
+        card = self.real_card()
+        del card["sellerId"]
+        p = self.adapter.normalize_native(card)
+        self.assertEqual(p.classification, "POR_VERIFICAR")
+        self.assertEqual(self.adapter.stock(p).state, "DESCONOCIDO")
+
+    def test_native_wrong_id_rejected(self):
+        card = dict(self.real_card(), productId="0")
+        with self.assertRaises(ValueError):
+            self.adapter.normalize_native(card)
+
+    def test_native_empty_confirmed_by_count(self):
+        self.client.get.return_value = self.native_html([], count=0)
+        r = self.adapter.search()
+        self.assertTrue(r.complete)
+        self.assertEqual(r.products, [])
+
+    def test_native_nonempty_count_missing_cards_is_incomplete(self):
+        self.client.get.return_value = self.native_html([], count=5)
+        self.assertFalse(self.adapter.search().complete)
+
+    def test_native_malformed_pagination_not_empty(self):
+        self.client.get.return_value = self.native_html([], count="0")
+        self.assertFalse(self.adapter.search().complete)
+
+    def test_native_server_ignores_page(self):
+        card = self.real_card()
+        card["displayName"] = NAME
+        detail = raw()
+        detail["url"] = card["url"]
+        self.client.get.side_effect = [
+            self.native_html([card], count=2, per_page=1),
+            html(detail),
+            self.native_html([card], count=2, per_page=1),
+        ]
+        self.assertFalse(self.adapter.search().complete)
+
+    def test_native_page_cap_is_incomplete(self):
+        self.adapter.settings.pages = 1
+        card = self.real_card()
+        card["displayName"] = NAME
+        detail = raw()
+        detail["url"] = card["url"]
+        self.client.get.side_effect = [
+            self.native_html([card], count=2, per_page=1),
+            html(detail),
+        ]
+        self.assertFalse(self.adapter.search().complete)
+
+    def test_native_broadened_results_do_not_fetch_unrelated_details(self):
+        card = dict(self.real_card(), displayName="Peluche Bluey 30 cm", brand="Bluey")
+        self.client.get.return_value = self.native_html([card])
+        r = self.adapter.search()
+        self.assertTrue(r.complete, r.errors)
+        self.assertEqual(r.products, [])
+        self.assertEqual(self.client.get.call_count, 1)
+
+    def test_native_pokemon_clothing_not_tcg(self):
+        card = dict(
+            self.real_card(), displayName="Polo Pokémon algodón niño", brand="POKEMON"
+        )
+        self.client.get.return_value = self.native_html([card])
+        r = self.adapter.search()
+        self.assertTrue(r.complete, r.errors)
+        self.assertEqual(r.products, [])
+        self.assertEqual(self.client.get.call_count, 1)
+
+    def test_native_unrelated_first_page_does_not_hide_later_candidate(self):
+        first = dict(self.real_card(), displayName="Peluche Bluey", brand="Bluey")
+        second = dict(
+            first,
+            productId="999999999",
+            displayName=NAME,
+            brand="POKEMON",
+            url=URL.replace("123456789", "999999999"),
+        )
+        detail = raw()
+        detail["url"] = second["url"]
+        self.client.get.side_effect = [
+            self.native_html([first], count=2, per_page=1),
+            self.native_html([second], count=2, page=2, per_page=1),
+            html(detail),
+        ]
+        r = self.adapter.search()
+        self.assertTrue(r.complete, r.errors)
+        self.assertEqual([p.id for p in r.products], ["999999999"])
