@@ -1,6 +1,6 @@
 # PokemonMonitor
 
-Monitor de **Pokémon TCG, 30.º aniversario, inglés**, para Plaza Vea, Oechsle y Ripley (Perú). Consulta solo el catálogo público y envía avisos por Telegram con enlaces para compra manual. No inicia sesión en cuentas de clientes, no añade al carrito y no compra ni paga.
+Monitor de **Pokémon TCG, 30.º aniversario, inglés**, para Plaza Vea, Oechsle, Ripley e Ilahui (Perú). Consulta solo el catálogo público y envía avisos por Telegram con enlaces para compra manual. No inicia sesión en cuentas de clientes, no añade al carrito y no compra ni paga.
 
 ## Estado de la integración
 
@@ -42,7 +42,7 @@ Para ambas tiendas:
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las tres). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Plaza Vea se redescubre cada cuatro horas; Oechsle y Ripley cada dos minutos. Los descubrimientos vencidos fallidos reintentan tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
+Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las cuatro). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Plaza Vea se redescubre cada cuatro horas; Oechsle y Ripley e Ilahui cada dos minutos. Los descubrimientos vencidos fallidos reintentan tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
 
 Para configurar un producto específico de Oechsle en `MONITOR_PRODUCTS_JSON`, incluye `"tienda":"Oechsle"`, además de su URL e ID opcional. Si omites `tienda`, se interpreta como Plaza Vea por compatibilidad. La clasificación sigue exigiendo prueba de edición e idioma; un enlace manual no los confirma automáticamente.
 
@@ -111,6 +111,44 @@ Oechsle usa ahora `OECHSLE_DISCOVERY_INTERVAL=120` por defecto. La medición rea
 
 No necesitas modificar `.env` si quieres ese valor por defecto. `MONITOR_INTERVAL=120` sigue siendo la pausa después de cada ciclo completo: Oechsle, Ripley y el seguimiento de productos guardados se ejecutan secuencialmente, por lo que los inicios pueden estar separados por más de 120 segundos. Los errores y 429 conservan el backoff; no se eliminan pausas ni límites. Para personalizarlo se puede agregar `OECHSLE_DISCOVERY_INTERVAL=120` sin tocar `DISCOVERY_INTERVAL` de Plaza Vea.
 
+## Ilahui: búsqueda directa cada dos minutos
+
+`tiendas/ilahui.py` consulta únicamente `/search` con las opciones proporcionadas: `options[unavailable_products]=last`, `options[prefix]=last` y `options[fields]=title,vendor,product_type,variants.title`. Añade `type=product` y conserva esas opciones al paginar. Los agotados quedan al final de los resultados; se incluyen mientras estén dentro de las páginas devueltas y del límite configurado. **No usa sitemaps, rastreo ampliado ni procesos separados.** Si no hay resultados interpretables, termina esa búsqueda; un bloqueo o HTML no reconocido no se interpreta como catálogo vacío ni stock agotado.
+
+Los enlaces `/products/{handle}` se obtienen del HTML y se normalizan quitando seguimiento y variantes; los alias `/collections/.../products/...` se convierten al mismo enlace. Los detalles se leen del endpoint público Shopify `/products/{handle}.js`. Se verifica el ID estable, título, descripción, tipo de producto, etiquetas y variantes para confirmar Pokémon TCG + 30.º aniversario + inglés. El idioma español sigue excluido. `vendor` es metadato del producto y no se confunde con un vendedor marketplace de otra plataforma.
+
+Una variante con `available=true` indica disponibilidad para compra según Shopify. Todas las variantes seleccionadas con `false` confirman agotado; información incompleta o contradictoria da desconocido. El precio del JSON se convierte desde centavos y la moneda se toma de una declaración explícita de la tienda (no se presupone PEN). No se garantiza inventario físico o entrega por ubicación. Los filtros de ubicación/canal/vendedor no están implementados: déjalos vacíos. `ILAHUI_SKU_ID`, opcional, selecciona un **ID de variante Shopify**, no el código comercial SKU.
+
+Validación real: la búsqueda configurada completó en **20.1 segundos** con pausa de 0.5 s entre peticiones; conservó 29 publicaciones pendientes, sin candidatos confirmados del 30.º aniversario en inglés. Se verificó una ficha de Mini Tin del 30.º aniversario en español, con `available=false`, variantes sin disponibilidad y precio JSON `5990` (59.90 en la moneda de la tienda); se descartó por idioma. Los resultados y tiempos son orientativos y cambian con la tienda y la conexión. No se envió Telegram real desde Codex por falta de credenciales de esta instancia.
+
+Para activar Ilahui, **reemplaza** la línea `RETAILERS` de tu `.env` y agrega sus opciones, conservando el token y chat actuales:
+
+```dotenv
+RETAILERS=plazavea,oechsle,ripley,ilahui
+ILAHUI_DISCOVERY_INTERVAL=120
+ILAHUI_CONTEXT_CONFIRMED=true
+ILAHUI_POSTAL_CODE=
+ILAHUI_SALES_CHANNEL=
+ILAHUI_SELLER_ID=
+ILAHUI_SKU_ID=
+```
+
+Después de detener el monitor con Ctrl+C:
+
+```powershell
+# Una búsqueda solo de Ilahui, con duración total visible.
+$tiempo = Measure-Command {
+    .\.venv\Scripts\python.exe main.py --retailer ilahui --discover | Out-Host
+}
+"Tiempo total: {0:N1} segundos" -f $tiempo.TotalSeconds
+# Ver candidatos aceptados y enlaces guardados.
+.\.venv\Scripts\python.exe main.py --retailer ilahui --list-products
+# Continuar con las cuatro tiendas.
+.\.venv\Scripts\python.exe main.py --loop
+```
+
+No cambia el descubrimiento de Plaza Vea (cuatro horas), Oechsle o Ripley (dos minutos), ni sus filtros. Ilahui mantiene su propia fecha en SQLite. El intervalo es un mínimo entre búsquedas, comprobado al comenzar un ciclo: con `MONITOR_INTERVAL=120` se espera dos minutos **después del procesamiento del conjunto de tiendas**, sin prometer inicios exactos cada 120 segundos. Los errores/429 conservan el backoff; el sitio puede limitar acceso. Una ficha no publicada en los resultados de búsqueda no se descubrirá por esta vía; los candidatos guardados sí continúan consultándose por su enlace.
+
 ## Instalación
 
 Python **3.12 recomendado** (mínimo 3.10). Desde el directorio del repositorio:
@@ -133,7 +171,7 @@ Edita `.env` localmente; nunca lo subas. Las variables ya exportadas prevalecen 
 
 ## Seguimiento rápido e intervalos de descubrimiento por tienda
 
-`--once` y `--loop` consultan detalles y stock de los candidatos guardados y de los productos configurados explícitamente. Además, hacen una búsqueda general **solo cuando toca**: al primer arranque sin fecha guardada y después cada cuatro horas para Plaza Vea, y cada dos minutos para Oechsle/Ripley. Las publicaciones pendientes se conservan pero no se consultan en cada revisión de stock.
+`--once` y `--loop` consultan detalles y stock de los candidatos guardados y de los productos configurados explícitamente. Además, hacen una búsqueda general **solo cuando toca**: al primer arranque sin fecha guardada y después cada cuatro horas para Plaza Vea, y cada dos minutos para Oechsle/Ripley/Ilahui. Las publicaciones pendientes se conservan pero no se consultan en cada revisión de stock.
 
 Configura en `.env` (los archivos existentes no se sobrescriben al actualizar):
 
@@ -154,7 +192,7 @@ DISCOVERY_RETRY_INTERVAL=900
 
 La fecha de la última búsqueda completada y la del último intento quedan en SQLite. Reiniciar el programa conserva los intervalos pendientes de cada tienda. Al actualizar desde la versión manual anterior, se hará un descubrimiento inicial porque todavía no existe esa fecha. Las búsquedas incompletas o fallidas conservan sus resultados parciales y los objetivos conocidos, sin marcar éxito; cuando corresponde un descubrimiento, el reintento espera 15 minutos por defecto, también tras reiniciar. Los fallos de stock o Telegram no invalidan por sí mismos una búsqueda completada.
 
-El planificador se comprueba al comenzar cada ciclo: el intervalo de cada tienda (cuatro horas para Plaza Vea, dos minutos para Oechsle/Ripley) es un mínimo entre búsquedas completadas y la siguiente puede empezar algo después, según el ciclo y las pausas. Los 120 segundos se esperan **después de terminar cada revisión**, no son un periodo exacto entre inicios. No hay tareas simultáneas: cuando toca descubrir, ese ciclo puede tardar más y luego continúa el seguimiento habitual.
+El planificador se comprueba al comenzar cada ciclo: el intervalo de cada tienda (cuatro horas para Plaza Vea, dos minutos para Oechsle/Ripley/Ilahui) es un mínimo entre búsquedas completadas y la siguiente puede empezar algo después, según el ciclo y las pausas. Los 120 segundos se esperan **después de terminar cada revisión**, no son un periodo exacto entre inicios. No hay tareas simultáneas: cuando toca descubrir, ese ciclo puede tardar más y luego continúa el seguimiento habitual.
 
 Para forzar `--discover` o listar mientras corre el bucle, deténlo con Ctrl+C y reinícialo después. El bloqueo impide ejecutar ambos simultáneamente. El descubrimiento guarda candidatos y pendientes y puede enviar alertas de nuevos candidatos disponibles. Reutiliza los detalles completos de búsqueda para evitar otra consulta por resultado. Los pendientes se reevalúan cuando reaparecen en un descubrimiento o están configurados explícitamente. No borres la base existente: conserva candidatos y transiciones sin repetir avisos de disponibilidad continua.
 

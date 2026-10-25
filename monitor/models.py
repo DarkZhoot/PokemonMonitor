@@ -12,6 +12,7 @@ RETAILERS = {
     "Plaza Vea": ("plazavea", "www.plazavea.com.pe", "plazavea.com.pe"),
     "Oechsle": ("oechsle", "www.oechsle.pe", "oechsle.pe"),
     "Ripley": ("ripley", "simple.ripley.com.pe", "ripley.com.pe"),
+    "Ilahui": ("ilahui", "ilahuiperu.com", "www.ilahuiperu.com"),
 }
 
 
@@ -32,6 +33,11 @@ def normalize_url(url, retailer="Plaza Vea"):
     if retailer == "Ripley":
         if not re.fullmatch(r"/[^/]+(?:[0-9]{6,}p|pmp[a-z0-9]+)", path, re.IGNORECASE):
             raise ValueError("URL no es una ficha de Ripley reconocida")
+    elif retailer == "Ilahui":
+        match = re.fullmatch(r"(?:/collections/[^/]+)?/products/([^/]+)", path)
+        if not match or match[1] in (".", "..") or match[1].endswith((".js", ".json")):
+            raise ValueError("URL no es una ficha de Ilahui")
+        path = "/products/" + match[1]
     elif not path.endswith("/p"):
         raise ValueError("URL no es de producto")
     return urlunsplit(("https", host, path, "", ""))

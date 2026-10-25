@@ -54,7 +54,9 @@ class Settings:
     sales_channel: str = ""
     seller_id: str = ""
     sku_id: str = ""
-    retailers: list = field(default_factory=lambda: ["plazavea", "oechsle", "ripley"])
+    retailers: list = field(
+        default_factory=lambda: ["plazavea", "oechsle", "ripley", "ilahui"]
+    )
     oechsle_discovery_interval: int = 120
     oechsle_context_confirmed: bool = True
     oechsle_postal_code: str = ""
@@ -69,10 +71,17 @@ class Settings:
     ripley_seller_id: str = ""
     ripley_sku_id: str = ""
 
+    ilahui_discovery_interval: int = 120
+    ilahui_context_confirmed: bool = True
+    ilahui_postal_code: str = ""
+    ilahui_sales_channel: str = ""
+    ilahui_seller_id: str = ""
+    ilahui_sku_id: str = ""
+
     def for_retailer(self, name):
         if name == "plazavea":
             return self
-        if name not in ("oechsle", "ripley"):
+        if name not in ("oechsle", "ripley", "ilahui"):
             raise ValueError("Retailer desconocido")
         selected = replace(
             self,
@@ -100,6 +109,7 @@ class Settings:
             ("discovery_interval", "DISCOVERY_INTERVAL", 60),
             ("ripley_discovery_interval", "RIPLEY_DISCOVERY_INTERVAL", 60),
             ("oechsle_discovery_interval", "OECHSLE_DISCOVERY_INTERVAL", 60),
+            ("ilahui_discovery_interval", "ILAHUI_DISCOVERY_INTERVAL", 60),
             ("discovery_retry_interval", "DISCOVERY_RETRY_INTERVAL", 60),
             ("timeout", "MONITOR_TIMEOUT", 1),
             ("retries", "MONITOR_RETRIES", 0),
@@ -115,6 +125,7 @@ class Settings:
                     "discovery_interval": 604800,
                     "ripley_discovery_interval": 604800,
                     "oechsle_discovery_interval": 604800,
+                    "ilahui_discovery_interval": 604800,
                     "discovery_retry_interval": 86400,
                     "timeout": 120,
                     "retries": 5,
@@ -157,14 +168,16 @@ class Settings:
         s.retailers = list(
             dict.fromkeys(
                 x.strip().lower()
-                for x in os.getenv("RETAILERS", "plazavea,oechsle,ripley").split(",")
+                for x in os.getenv("RETAILERS", "plazavea,oechsle,ripley,ilahui").split(
+                    ","
+                )
                 if x.strip()
             )
         )
         if not s.retailers or any(
-            x not in ("plazavea", "oechsle", "ripley") for x in s.retailers
+            x not in ("plazavea", "oechsle", "ripley", "ilahui") for x in s.retailers
         ):
-            raise ValueError("RETAILERS: usa plazavea,oechsle,ripley")
+            raise ValueError("RETAILERS: usa plazavea,oechsle,ripley,ilahui")
         s.oechsle_context_confirmed = (
             os.getenv("OECHSLE_CONTEXT_CONFIRMED", "true").strip().lower() == "true"
         )
@@ -175,4 +188,9 @@ class Settings:
         )
         for attr in ["postal_code", "sales_channel", "seller_id", "sku_id"]:
             setattr(s, "ripley_" + attr, os.getenv("RIPLEY_" + attr.upper(), ""))
+        s.ilahui_context_confirmed = (
+            os.getenv("ILAHUI_CONTEXT_CONFIRMED", "true").strip().lower() == "true"
+        )
+        for attr in ["postal_code", "sales_channel", "seller_id", "sku_id"]:
+            setattr(s, "ilahui_" + attr, os.getenv("ILAHUI_" + attr.upper(), ""))
         return s
