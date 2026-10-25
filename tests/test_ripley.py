@@ -29,6 +29,7 @@ def schema(availability="https://schema.org/InStock"):
             "@type": "Offer",
             "price": "789",
             "priceCurrency": "PEN",
+            "seller": {"name": "Ripley"},
             "availability": availability,
         },
     }
@@ -40,6 +41,7 @@ def detail_html(data=None, canonical=URL):
 
 def native():
     return {
+        "seller": "RIPLEY",
         "sku": "9865719",
         "parentProductID": "PMP20001667733",
         "name": TITLE,
@@ -223,7 +225,11 @@ class RipleyAdapterTests(unittest.TestCase):
             listing(total=2, limit=1, offset=1),
         ]
         self.assertTrue(self.a.search().complete)
-        self.assertTrue(self.a.client.get.call_args.args[0].endswith("?page=2"))
+        from urllib.parse import parse_qs, urlsplit
+
+        params = parse_qs(urlsplit(self.a.client.get.call_args.args[0]).query)
+        self.assertEqual(params["page"], ["2"])
+        self.assertEqual(params["facets"], ["Vendido por:Ripley"])
 
     def test_native_pagination_cap_incomplete(self):
         self.s.pages = 1

@@ -1,0 +1,117 @@
+"""Política fija: en Ripley solo se aceptan ventas propias confirmadas."""
+
+import json
+from dataclasses import asdict
+from monitor.models import Product
+
+
+def schema_seller(offer):
+    if not isinstance(offer, dict):
+        return "unknown"
+    seller = offer.get("seller")
+    name = seller.get("name") if isinstance(seller, dict) else seller
+    if not isinstance(name, str) or not name.strip():
+        return "unknown"
+    return "ripley" if name.strip().casefold() == "ripley" else "marketplace"
+
+
+def ripley_seller(product):
+    native = product.raw.get("native")
+    if isinstance(native, dict):
+        seller = native.get("seller")
+        if isinstance(seller, str):
+            if seller.strip().upper() == "RIPLEY":
+                return "ripley"
+            if seller.strip().upper() == "MARKETPLACE":
+                return "marketplace"
+        return "unknown"
+    raw = product.raw.get("schema", {})
+    offers = raw.get("offers") if isinstance(raw, dict) else None
+    if isinstance(offers, dict):
+        offers = [offers]
+    if not isinstance(offers, list) or not offers:
+        return "unknown"
+    states = [schema_seller(offer) for offer in offers]
+    if "ripley" in states:
+        return "ripley"
+    return (
+        "marketplace" if all(state == "marketplace" for state in states) else "unknown"
+    )
+
+
+def restrict_ripley(product):
+    if product.retailer == "Ripley":
+        seller = ripley_seller(product)
+        if seller == "marketplace":
+            product.classification = "DESCARTADO"
+        elif seller == "unknown" and product.classification != "DESCARTADO":
+            product.classification = "POR_VERIFICAR"
+    return product
+
+
+def enforce_ripley_scope(store, log):
+    """Conserva historial; retira objetivos y cancela avisos fuera del nuevo alcance."""
+    products = {
+        product.key: product
+        for product in (
+            Product(**json.loads(row[0]))
+            for row in store.db.execute(
+                "SELECT data FROM products WHERE key LIKE 'ripley:%'"
+            )
+        )
+    }
+    excluded = {}
+    with store.db:
+        if not store.db.execute(
+            "SELECT 1 FROM meta WHERE key='ripley_scope_direct_v1'"
+        ).fetchone():
+            # Only Ripley's old discovery covered the wrong seller scope.
+            store.db.execute(
+                "DELETE FROM meta WHERE key IN ('ripley:discovery_attempt','ripley:discovery_success')"
+            )
+            store.db.execute("INSERT INTO meta VALUES('ripley_scope_direct_v1','1')")
+            log("ripley_scope_updated", scope="Vendido por:Ripley")
+        for key, product in products.items():
+            seller = ripley_seller(product)
+            if seller == "ripley":
+                continue
+            excluded[key] = seller
+            original = product.classification
+            restrict_ripley(product)
+            if product.classification != original:
+                store.db.execute(
+                    "UPDATE products SET data=?,detail=? WHERE key=?",
+                    (
+                        json.dumps(asdict(product), ensure_ascii=False),
+                        "Fuera de seguimiento: vendedor Ripley no confirmado",
+                        key,
+                    ),
+                )
+        for row in store.db.execute(
+            "SELECT id,product_key,payload FROM events WHERE status IN ('pending','failed')"
+        ).fetchall():
+            event = json.loads(row["payload"])
+            key = row["product_key"]
+            if event.get("tienda") != "Ripley" and not (key or "").startswith(
+                "ripley:"
+            ):
+                continue
+            if (
+                key in products
+                and key not in excluded
+                and event.get("seller_scope") == "ripley_direct_v1"
+            ):
+                continue
+            store.db.execute(
+                "UPDATE events SET status='cancelled',error=? WHERE id=?",
+                (
+                    "Cancelado: solo ventas propias de Ripley; vendedor no admitido o desconocido",
+                    row["id"],
+                ),
+            )
+            log(
+                "telegram_cancelled",
+                event_id=row["id"],
+                reason="Ripley: vendedor fuera del alcance",
+            )
+    return len(excluded)

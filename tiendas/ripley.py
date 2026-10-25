@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qs, urlencode, quo
 from monitor.http import Client, RemoteError
 from monitor.models import Product, SearchResult, Stock, normalize_url
 from monitor.settings import Settings
+from monitor.sellers import restrict_ripley, ripley_seller, schema_seller
 from tiendas.vtex import classify, normalizar
 
 BASE_URL = "https://simple.ripley.com.pe"
@@ -145,13 +146,15 @@ class Ripley:
         )
         if not match:
             raise ValueError("Identificador no reconocido")
-        return Product(
-            match[1].upper(),
-            str(raw.get("name") or ""),
-            url,
-            classify(evidence(raw), self.settings.exclusions),
-            retailer="Ripley",
-            raw={"schema": raw, "_needs_details": not bool(raw.get("offers"))},
+        return restrict_ripley(
+            Product(
+                match[1].upper(),
+                str(raw.get("name") or ""),
+                url,
+                classify(evidence(raw), self.settings.exclusions),
+                retailer="Ripley",
+                raw={"schema": raw, "_needs_details": not bool(raw.get("offers"))},
+            )
         )
 
     def native_listing(self, page):
@@ -180,20 +183,22 @@ class Ripley:
                 break
         if not url:
             raise ValueError("Falta enlace directo verificable")
-        return Product(
-            parent,
-            str(raw.get("name") or ""),
-            url,
-            classify(
-                dict(
-                    productName=raw.get("name", ""),
-                    description=raw.get("description", ""),
-                    brand=raw.get("brand", ""),
+        return restrict_ripley(
+            Product(
+                parent,
+                str(raw.get("name") or ""),
+                url,
+                classify(
+                    dict(
+                        productName=raw.get("name", ""),
+                        description=raw.get("description", ""),
+                        brand=raw.get("brand", ""),
+                    ),
+                    self.settings.exclusions,
                 ),
-                self.settings.exclusions,
-            ),
-            retailer="Ripley",
-            raw={"native": raw, "_needs_details": False},
+                retailer="Ripley",
+                raw={"native": raw, "_needs_details": False},
+            )
         )
 
     def details(self, product):
@@ -203,6 +208,13 @@ class Ripley:
         page = CatalogHTML(self.client.get(url, as_text=True))
         matches = {}
         for raw in page.products:
+            # Review-only Product nodes share @id but contain no product/offer data.
+            if (
+                not raw.get("name")
+                and not raw.get("offers")
+                and not raw.get("description")
+            ):
+                continue
             data = dict(raw)
             # A missing URL is accepted only with an explicit canonical product URL.
             if not data.get("url"):
@@ -236,7 +248,19 @@ class Ripley:
         found = {}
         visited = set()
         for term in self.settings.terms:
-            url = BASE_URL + "/search/" + quote(term, safe="")
+            url = (
+                BASE_URL
+                + "/search/"
+                + quote(term, safe="")
+                + "?"
+                + urlencode(
+                    {
+                        "sort": "relevance_desc",
+                        "page": 1,
+                        "facets": "Vendido por:Ripley",
+                    }
+                )
+            )
             for page_number in range(self.settings.pages):
                 if url in visited:
                     break
@@ -353,7 +377,18 @@ class Ripley:
                         except ValueError:
                             continue
                         if candidate_page == current_page + 1:
-                            next_url = candidate
+                            filters = parse_qs(parsed.query)
+                            filters["facets"] = ["Vendido por:Ripley"]
+                            filters["sort"] = ["relevance_desc"]
+                            next_url = urlunsplit(
+                                (
+                                    parsed.scheme,
+                                    parsed.netloc,
+                                    parsed.path,
+                                    urlencode(filters, doseq=True),
+                                    "",
+                                )
+                            )
                             break
                     if not next_url:
                         break
@@ -378,6 +413,8 @@ class Ripley:
         return result
 
     def stock(self, product):
+        if ripley_seller(product) != "ripley":
+            return Stock(detail="Vendedor Ripley no confirmado; marketplace excluido")
         if not self.settings.context_confirmed:
             return Stock(detail="Interpretación de catálogo Ripley deshabilitada")
         if any(
@@ -424,6 +461,10 @@ class Ripley:
             offers = [offers]
         if not isinstance(offers, list) or not offers:
             return Stock(detail="Sin ofertas interpretables")
+        unknown_seller = any(schema_seller(offer) == "unknown" for offer in offers)
+        offers = [offer for offer in offers if schema_seller(offer) == "ripley"]
+        if not offers:
+            return Stock(detail="No hay ofertas confirmadas vendidas por Ripley")
         available = []
         out = 0
         for offer in offers:
@@ -463,6 +504,6 @@ class Ripley:
                 currency,
                 "Oferta schema.org InStock; sin garantía de entrega",
             )
-        if out == len(offers):
+        if out == len(offers) and not unknown_seller:
             return Stock("AGOTADO", detail="Todas las ofertas confirman OutOfStock")
         return Stock(detail="Disponibilidad ausente, ambigua o no confirmada")

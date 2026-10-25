@@ -6,6 +6,7 @@ from datetime import datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 from monitor.models import Product, Stock, normalize_url
+from monitor.sellers import restrict_ripley
 
 
 def now():
@@ -152,6 +153,7 @@ class Store:
                 self.db.execute("DELETE FROM products WHERE key=?", (row["key"],))
 
     def observe(self, product, stock):
+        restrict_ripley(product)
         with self.db:
             self.merge_identity(product)
             old = self.db.execute(
@@ -193,6 +195,8 @@ class Store:
                     moneda=stock.currency,
                     fecha=stamp,
                 )
+                if product.retailer == "Ripley":
+                    event["seller_scope"] = "ripley_direct_v1"
                 self.db.execute(
                     "INSERT INTO events(id,product_key,payload) VALUES(?,?,?)",
                     (event["id"], product.key, json.dumps(event, ensure_ascii=False)),

@@ -8,6 +8,7 @@ from monitor.http import RemoteError
 from monitor.locking import exclusive, AlreadyRunning
 from monitor.models import Product, Stock, normalize_url
 from monitor.settings import Settings, ROOT
+from monitor.sellers import enforce_ripley_scope, ripley_seller
 from monitor.store import Store, now
 from monitor.telegram import Telegram, deliver
 from tiendas.plaza_vea import PlazaVea
@@ -78,6 +79,8 @@ def cycle(
                 url,
                 retailer=retailer,
             )
+        if retailer == "Ripley" and ripley_seller(p) == "marketplace":
+            continue
         products[p.key] = p
     fresh = set()
     if result:
@@ -258,6 +261,7 @@ def main():
             store = Store(settings.data_dir / "monitor.sqlite3")
             try:
                 store.migrate(ROOT)
+                enforce_ripley_scope(store, log)
                 if args.list_products:
                     print(
                         json.dumps(
