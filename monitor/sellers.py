@@ -213,3 +213,34 @@ def enforce_oechsle_scope(store, log):
 
 def enforce_seller_scopes(store, log):
     return enforce_ripley_scope(store, log) + enforce_oechsle_scope(store, log)
+
+
+def falabella_offer_seller(offer):
+    if not isinstance(offer, dict):
+        return "unknown"
+    seller = offer.get("seller")
+    name = seller.get("name") if isinstance(seller, dict) else seller
+    if not isinstance(name, str) or not name.strip():
+        return "unknown"
+    return (
+        "falabella"
+        if name.strip().casefold() in ("falabella", "saga falabella")
+        else "marketplace"
+    )
+
+
+def restrict_falabella(product):
+    if product.retailer != "Falabella":
+        return product
+    offers = product.raw.get("schema", {}).get("offers", [])
+    if isinstance(offers, dict):
+        offers = [offers]
+    states = (
+        [falabella_offer_seller(x) for x in offers] if isinstance(offers, list) else []
+    )
+    if "falabella" not in states:
+        if states and all(x == "marketplace" for x in states):
+            product.classification = "DESCARTADO"
+        elif product.classification != "DESCARTADO":
+            product.classification = "POR_VERIFICAR"
+    return product

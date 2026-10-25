@@ -6,7 +6,7 @@ from datetime import datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 from monitor.models import Product, Stock, normalize_url
-from monitor.sellers import restrict_ripley, restrict_oechsle
+from monitor.sellers import restrict_ripley, restrict_oechsle, restrict_falabella
 
 
 def now():
@@ -155,6 +155,7 @@ class Store:
     def observe(self, product, stock):
         restrict_ripley(product)
         restrict_oechsle(product)
+        restrict_falabella(product)
         with self.db:
             self.merge_identity(product)
             old = self.db.execute(

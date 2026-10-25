@@ -1,6 +1,6 @@
 # PokemonMonitor
 
-Monitor de **Pokémon TCG, 30.º aniversario, inglés**, para Plaza Vea, Oechsle, Ripley, Ilahui y Tai Loy (Perú). Consulta solo el catálogo público y envía avisos por Telegram con enlaces para compra manual. No inicia sesión en cuentas de clientes, no añade al carrito y no compra ni paga.
+Monitor de **Pokémon TCG, 30.º aniversario, inglés**, para Plaza Vea, Oechsle, Ripley, Ilahui, Tai Loy y Falabella (Perú). Consulta solo el catálogo público y envía avisos por Telegram con enlaces para compra manual. No inicia sesión en cuentas de clientes, no añade al carrito y no compra ni paga.
 
 ## Estado de la integración
 
@@ -42,7 +42,7 @@ Para ambas tiendas:
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las cinco). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Plaza Vea se redescubre cada cuatro horas; Oechsle y Ripley e Ilahui cada dos minutos. Los descubrimientos vencidos fallidos reintentan tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
+Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las seis). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Plaza Vea se redescubre cada cuatro horas; Oechsle, Ripley, Ilahui, Tai Loy y Falabella cada dos minutos. Los descubrimientos vencidos fallidos reintentan tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
 
 Para configurar un producto específico de Oechsle en `MONITOR_PRODUCTS_JSON`, incluye `"tienda":"Oechsle"`, además de su URL e ID opcional. Si omites `tienda`, se interpreta como Plaza Vea por compatibilidad. La clasificación sigue exigiendo prueba de edición e idioma; un enlace manual no los confirma automáticamente.
 
@@ -444,3 +444,53 @@ El clasificador usa títulos, descripciones, especificaciones y variantes; sigue
 `monitor/models.py` define `Retailer` (búsqueda, detalles, stock y normalización). `tiendas/plaza_vea.py` y `tiendas/oechsle.py` configuran los dos adaptadores VTEX; `tiendas/vtex.py` comparte clasificación, catálogo y reglas conservadoras de stock. `tiendas/ripley.py` añade el adaptador de HTML/datos estructurados para Ripley. `monitor/app.py` coordina el ciclo; `store.py` conserva la lógica de transiciones/pendientes del monitor original mediante transacciones, `telegram.py` entrega avisos y `http.py` controla red. `tiendas/descubridor.py` conserva las entradas básicas de búsqueda/clasificación originales.
 
 Los cambios se preparan en `feature/telegram-stock-monitor`; no se fusionan ni se publican automáticamente. Revisa el diff y valida la integración autorizada antes de operar alertas de stock en producción. Agregar otro retailer requerirá su adaptador, configuración y pruebas; Falabella no está implementado.
+
+
+## Falabella: solo venta propia
+
+Activar con `RETAILERS=plazavea,oechsle,ripley,ilahui,tailoy,falabella` y:
+
+```dotenv
+FALABELLA_DISCOVERY_INTERVAL=120
+FALABELLA_CONTEXT_CONFIRMED=true
+```
+
+El adaptador consulta `/falabella-pe/search` con cada término configurado,
+`facetSelected=true` y `f.derived.variant.sellerId=FALABELLA`. Reconstruye esos
+filtros también al avanzar de página, sin seguir enlaces externos ni rastrear
+sitemaps. Guarda enlaces de producto e identifica Pokémon TCG 30 aniversario
+en inglés con las mismas reglas de clasificación existentes.
+
+La disponibilidad requiere una ficha con identidad verificable y ofertas públicas
+schema.org cuyo vendedor sea exactamente Falabella o Saga Falabella. Marketplace
+se excluye y vendedor ausente queda por verificar. Una oferta de un tercero no
+aporta stock ni precio a una oferta propia agotada. Preventa, disponibilidad
+ambigua, bloqueo, HTML incompatible y errores conservan estado desconocido;
+no se deduce agotamiento por ausencia de resultados. Un botón de compra por sí
+solo no prueba stock. No se confirma entrega por ubicación y los filtros opcionales
+`FALABELLA_POSTAL_CODE`, `FALABELLA_SALES_CHANNEL`, `FALABELLA_SELLER_ID` y
+`FALABELLA_SKU_ID` deben permanecer vacíos.
+
+**Validación pendiente contra el sitio real:** en este entorno la conexión HTTPS
+fue rechazada por el proxy antes de recibir respuesta de Falabella. Las pruebas
+son fixtures simuladas, no evidencia del formato HTML actual ni de cobertura
+completa. No se implementó un parser especulativo de APIs privadas o de estados
+JavaScript. Si Falabella solo expone los datos con JavaScript o en otro formato,
+el ciclo informará búsqueda incompleta y será necesario adaptar el parser con
+una respuesta real. No se garantiza descubrir publicaciones que el buscador omite.
+
+Para comprobar solamente esta tienda en Windows, sin iniciar el bucle:
+
+```powershell
+$tiempo = Measure-Command {
+    .\.venv\Scripts\python.exe main.py --retailer falabella --discover | Out-Host
+}
+"Tiempo total: {0:N1} segundos" -f $tiempo.TotalSeconds
+```
+
+Revisar `search_incomplete`, `discovery_finished` y `cycle_finished` antes de
+considerar validada la integración. `--retailer falabella --list-products` muestra
+los candidatos guardados sin consultar la red. `main.py --loop` ejecuta todas las
+tiendas activadas. El reloj de descubrimiento de Falabella es independiente y
+predetermina 120 segundos; el ciclo completo y la espera posterior hacen que la
+frecuencia real no sea exactamente de dos minutos. Los demás adaptadores no cambian.

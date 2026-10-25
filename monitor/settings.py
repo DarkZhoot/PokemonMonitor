@@ -55,7 +55,14 @@ class Settings:
     seller_id: str = ""
     sku_id: str = ""
     retailers: list = field(
-        default_factory=lambda: ["plazavea", "oechsle", "ripley", "ilahui", "tailoy"]
+        default_factory=lambda: [
+            "plazavea",
+            "oechsle",
+            "ripley",
+            "ilahui",
+            "tailoy",
+            "falabella",
+        ]
     )
     oechsle_discovery_interval: int = 120
     oechsle_context_confirmed: bool = True
@@ -78,6 +85,13 @@ class Settings:
     ilahui_seller_id: str = ""
     ilahui_sku_id: str = ""
 
+    falabella_discovery_interval: int = 120
+    falabella_context_confirmed: bool = True
+    falabella_postal_code: str = ""
+    falabella_sales_channel: str = ""
+    falabella_seller_id: str = ""
+    falabella_sku_id: str = ""
+
     tailoy_discovery_interval: int = 120
     tailoy_context_confirmed: bool = True
     tailoy_postal_code: str = ""
@@ -89,7 +103,7 @@ class Settings:
     def for_retailer(self, name):
         if name == "plazavea":
             return self
-        if name not in ("oechsle", "ripley", "ilahui", "tailoy"):
+        if name not in ("oechsle", "ripley", "ilahui", "tailoy", "falabella"):
             raise ValueError("Retailer desconocido")
         selected = replace(
             self,
@@ -118,6 +132,7 @@ class Settings:
             ("ripley_discovery_interval", "RIPLEY_DISCOVERY_INTERVAL", 60),
             ("oechsle_discovery_interval", "OECHSLE_DISCOVERY_INTERVAL", 60),
             ("ilahui_discovery_interval", "ILAHUI_DISCOVERY_INTERVAL", 60),
+            ("falabella_discovery_interval", "FALABELLA_DISCOVERY_INTERVAL", 60),
             ("tailoy_discovery_interval", "TAILOY_DISCOVERY_INTERVAL", 60),
             ("discovery_retry_interval", "DISCOVERY_RETRY_INTERVAL", 60),
             ("timeout", "MONITOR_TIMEOUT", 1),
@@ -135,6 +150,7 @@ class Settings:
                     "ripley_discovery_interval": 604800,
                     "oechsle_discovery_interval": 604800,
                     "ilahui_discovery_interval": 604800,
+                    "falabella_discovery_interval": 604800,
                     "tailoy_discovery_interval": 604800,
                     "discovery_retry_interval": 86400,
                     "timeout": 120,
@@ -179,16 +195,18 @@ class Settings:
             dict.fromkeys(
                 x.strip().lower()
                 for x in os.getenv(
-                    "RETAILERS", "plazavea,oechsle,ripley,ilahui,tailoy"
+                    "RETAILERS", "plazavea,oechsle,ripley,ilahui,tailoy,falabella"
                 ).split(",")
                 if x.strip()
             )
         )
         if not s.retailers or any(
-            x not in ("plazavea", "oechsle", "ripley", "ilahui", "tailoy")
+            x not in ("plazavea", "oechsle", "ripley", "ilahui", "tailoy", "falabella")
             for x in s.retailers
         ):
-            raise ValueError("RETAILERS: usa plazavea,oechsle,ripley,ilahui,tailoy")
+            raise ValueError(
+                "RETAILERS: usa plazavea,oechsle,ripley,ilahui,tailoy,falabella"
+            )
         s.oechsle_context_confirmed = (
             os.getenv("OECHSLE_CONTEXT_CONFIRMED", "true").strip().lower() == "true"
         )
@@ -209,6 +227,11 @@ class Settings:
         )
         for attr in ["postal_code", "sales_channel", "seller_id", "sku_id"]:
             setattr(s, "tailoy_" + attr, os.getenv("TAILOY_" + attr.upper(), ""))
+        s.falabella_context_confirmed = (
+            os.getenv("FALABELLA_CONTEXT_CONFIRMED", "true").strip().lower() == "true"
+        )
+        for attr in ["postal_code", "sales_channel", "seller_id", "sku_id"]:
+            setattr(s, "falabella_" + attr, os.getenv("FALABELLA_" + attr.upper(), ""))
         s.tailoy_brand_filter = os.getenv("TAILOY_BRAND_FILTER", "7212").strip()
         if s.tailoy_brand_filter and not s.tailoy_brand_filter.isdigit():
             raise ValueError(
