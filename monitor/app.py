@@ -15,6 +15,7 @@ from tiendas.plaza_vea import PlazaVea
 from tiendas.oechsle import Oechsle
 from tiendas.ripley import Ripley
 from tiendas.ilahui import Ilahui
+from tiendas.tailoy import Tailoy
 
 
 def configure(settings):
@@ -193,6 +194,7 @@ def scheduled_cycle(
         "Ripley": settings.ripley_discovery_interval,
         "Oechsle": settings.oechsle_discovery_interval,
         "Ilahui": settings.ilahui_discovery_interval,
+        "Tai Loy": settings.tailoy_discovery_interval,
     }.get(retailer, settings.discovery_interval)
     due = force_discovery or store.discovery_due(
         interval,
@@ -258,7 +260,7 @@ def main():
     )
     parser.add_argument(
         "--retailer",
-        choices=["plazavea", "oechsle", "ripley", "ilahui"],
+        choices=["plazavea", "oechsle", "ripley", "ilahui", "tailoy"],
         help="Limitar esta ejecución a una tienda",
     )
     args = parser.parse_args()
@@ -321,6 +323,7 @@ def main():
                     ("oechsle", "Oechsle", Oechsle),
                     ("ripley", "Ripley", Ripley),
                     ("ilahui", "Ilahui", Ilahui),
+                    ("tailoy", "Tai Loy", Tailoy),
                 ]:
                     if slug in enabled:
                         selected = settings.for_retailer(slug)

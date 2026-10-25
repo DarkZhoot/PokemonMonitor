@@ -1,6 +1,6 @@
 # PokemonMonitor
 
-Monitor de **Pokémon TCG, 30.º aniversario, inglés**, para Plaza Vea, Oechsle, Ripley e Ilahui (Perú). Consulta solo el catálogo público y envía avisos por Telegram con enlaces para compra manual. No inicia sesión en cuentas de clientes, no añade al carrito y no compra ni paga.
+Monitor de **Pokémon TCG, 30.º aniversario, inglés**, para Plaza Vea, Oechsle, Ripley, Ilahui y Tai Loy (Perú). Consulta solo el catálogo público y envía avisos por Telegram con enlaces para compra manual. No inicia sesión en cuentas de clientes, no añade al carrito y no compra ni paga.
 
 ## Estado de la integración
 
@@ -42,7 +42,7 @@ Para ambas tiendas:
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las cuatro). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Plaza Vea se redescubre cada cuatro horas; Oechsle y Ripley e Ilahui cada dos minutos. Los descubrimientos vencidos fallidos reintentan tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
+Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las cinco). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Plaza Vea se redescubre cada cuatro horas; Oechsle y Ripley e Ilahui cada dos minutos. Los descubrimientos vencidos fallidos reintentan tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
 
 Para configurar un producto específico de Oechsle en `MONITOR_PRODUCTS_JSON`, incluye `"tienda":"Oechsle"`, además de su URL e ID opcional. Si omites `tienda`, se interpreta como Plaza Vea por compatibilidad. La clasificación sigue exigiendo prueba de edición e idioma; un enlace manual no los confirma automáticamente.
 
@@ -148,6 +148,45 @@ $tiempo = Measure-Command {
 ```
 
 No cambia el descubrimiento de Plaza Vea (cuatro horas), Oechsle o Ripley (dos minutos), ni sus filtros. Ilahui mantiene su propia fecha en SQLite. El intervalo es un mínimo entre búsquedas, comprobado al comenzar un ciclo: con `MONITOR_INTERVAL=120` se espera dos minutos **después del procesamiento del conjunto de tiendas**, sin prometer inicios exactos cada 120 segundos. Los errores/429 conservan el backoff; el sitio puede limitar acceso. Una ficha no publicada en los resultados de búsqueda no se descubrirá por esta vía; los candidatos guardados sí continúan consultándose por su enlace.
+
+## Tai Loy: búsqueda directa cada dos minutos
+
+`tiendas/tailoy.py` consulta únicamente `/catalogsearch/result/index/`, usando `q` y el filtro de marca `tailoyetl_999_marcav2=7212` del enlace proporcionado. En la página comprobada, ese filtro muestra **Marca: POKEMON TCG**; no es un filtro de vendedor. Se omite `_gsSearchId`, que es un identificador de búsqueda/sesión, y se conserva el filtro al seguir enlaces de paginación (`p`). No recorre sitemaps ni categorías, ni inicia procesos de exploración adicional.
+
+Las fichas se identifican por su SKU verificado. Se interpretan JSON-LD o los microdatos del producto principal de Magento (nombre, descripción, SKU, precio y moneda); no se confunden títulos de recomendaciones con la ficha solicitada. Si es necesario, se consulta el endpoint público de **solo lectura** `/graphql` con `products(filter:{sku:{eq:...}})` para comprobar `stock_status`. No se consulta por un ID interno como si fuera un SKU comercial. No se envían formularios, no se ejecutan botones y no se realiza ninguna acción de carrito o cuenta.
+
+**Discrepancia real detectada:** una ficha del 30.º aniversario en español mostraba “Pre-Venta / NO DISPONIBLE”, aunque GraphQL devolvía `IN_STOCK`. Por eso preventa, indisponibilidad explícita de la ficha o información contradictoria mantienen `DESCONOCIDO` en vez de generar una alerta. Para productos simples sin esas señales, `IN_STOCK` y `OUT_OF_STOCK` son señales públicas de catálogo. Los productos configurables/agrupados sin datos completos de variantes se mantienen desconocidos. No se garantiza entrega por ubicación ni disponibilidad física del almacén.
+
+Validación real: las cuatro búsquedas configuradas terminaron en **33.8 segundos** con pausa de 0.5 s entre peticiones, conservaron 7 publicaciones pendientes de verificación y no confirmaron candidatos del 30.º aniversario en inglés. Las páginas de búsqueda y producto respondieron y se verificó la estructura del endpoint GraphQL público. Precio y moneda se toman de campos explícitos, sin suponer PEN ni convertirlos desde centavos (a diferencia de Shopify). Los resultados y tiempos pueden cambiar.
+
+Para activar Tai Loy, reemplaza `RETAILERS` en tu `.env` y agrega sus opciones:
+
+```dotenv
+RETAILERS=plazavea,oechsle,ripley,ilahui,tailoy
+TAILOY_DISCOVERY_INTERVAL=120
+TAILOY_CONTEXT_CONFIRMED=true
+TAILOY_BRAND_FILTER=7212
+TAILOY_POSTAL_CODE=
+TAILOY_SALES_CHANNEL=
+TAILOY_SELLER_ID=
+TAILOY_SKU_ID=
+```
+
+Conserva el token/chat y las opciones anteriores. Los filtros de ubicación, canal, vendedor y variante no están implementados: dejarlos vacíos. El filtro de marca es numérico; puede dejarse vacío para no aplicarlo, conservando los criterios del clasificador.
+
+Después de detener el bucle con Ctrl+C, prueba únicamente Tai Loy:
+
+```powershell
+$tiempo = Measure-Command {
+    .\.venv\Scripts\python.exe main.py --retailer tailoy --discover | Out-Host
+}
+"Tiempo total: {0:N1} segundos" -f $tiempo.TotalSeconds
+.\.venv\Scripts\python.exe main.py --retailer tailoy --list-products
+# Todas las tiendas
+.\.venv\Scripts\python.exe main.py --loop
+```
+
+Cada retailer conserva sus propios candidatos, historial y reloj. Plaza Vea sigue descubriendo cada cuatro horas; los demás cada dos minutos por defecto. El procesamiento es secuencial y se añade a la pausa `MONITOR_INTERVAL`; dos minutos no significa un tiempo exacto entre inicios. Los fallos/bloqueos no significan stock cero y conservan el backoff. Las fichas que la búsqueda no publica no se descubrirán por este modo directo; los candidatos ya guardados sí continúan consultándose.
 
 ## Instalación
 
