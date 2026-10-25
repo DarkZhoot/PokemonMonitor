@@ -55,6 +55,7 @@ class Settings:
     seller_id: str = ""
     sku_id: str = ""
     retailers: list = field(default_factory=lambda: ["plazavea", "oechsle", "ripley"])
+    oechsle_discovery_interval: int = 120
     oechsle_context_confirmed: bool = True
     oechsle_postal_code: str = ""
     oechsle_sales_channel: str = ""
@@ -87,8 +88,7 @@ class Settings:
             },
         )
 
-        if name == "ripley":
-            selected.discovery_interval = self.ripley_discovery_interval
+        selected.discovery_interval = getattr(self, name + "_discovery_interval")
         return selected
 
     @classmethod
@@ -99,6 +99,7 @@ class Settings:
             ("interval", "MONITOR_INTERVAL", 60),
             ("discovery_interval", "DISCOVERY_INTERVAL", 60),
             ("ripley_discovery_interval", "RIPLEY_DISCOVERY_INTERVAL", 60),
+            ("oechsle_discovery_interval", "OECHSLE_DISCOVERY_INTERVAL", 60),
             ("discovery_retry_interval", "DISCOVERY_RETRY_INTERVAL", 60),
             ("timeout", "MONITOR_TIMEOUT", 1),
             ("retries", "MONITOR_RETRIES", 0),
@@ -113,6 +114,7 @@ class Settings:
                     "interval": 86400,
                     "discovery_interval": 604800,
                     "ripley_discovery_interval": 604800,
+                    "oechsle_discovery_interval": 604800,
                     "discovery_retry_interval": 86400,
                     "timeout": 120,
                     "retries": 5,

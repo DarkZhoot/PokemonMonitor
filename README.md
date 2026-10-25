@@ -42,7 +42,7 @@ Para ambas tiendas:
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las tres). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Plaza Vea y Oechsle se redescubren cada cuatro horas; Ripley cada dos minutos. Los descubrimientos vencidos fallidos reintentan tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
+Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las tres). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Plaza Vea se redescubre cada cuatro horas; Oechsle y Ripley cada dos minutos. Los descubrimientos vencidos fallidos reintentan tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
 
 Para configurar un producto específico de Oechsle en `MONITOR_PRODUCTS_JSON`, incluye `"tienda":"Oechsle"`, además de su URL e ID opcional. Si omites `tienda`, se interpreta como Plaza Vea por compatibilidad. La clasificación sigue exigiendo prueba de edición e idioma; un enlace manual no los confirma automáticamente.
 
@@ -83,17 +83,23 @@ Después de detener el proceso anterior con Ctrl+C:
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-No cambies el token ni el chat ID del grupo. Ripley tiene sus propios estados y reloj persistente: el primer descubrimiento no reinicia el de Plaza Vea ni Oechsle. Los candidatos se consultan durante cada ciclo rápido. **Solo Ripley repite su búsqueda normal cada dos minutos** (`RIPLEY_DISCOVERY_INTERVAL=120`); Plaza Vea y Oechsle mantienen `DISCOVERY_INTERVAL=14400` (cuatro horas). Los reintentos y el bloqueo son compartidos por el proceso; las tiendas se procesan secuencialmente, sin prometer periodos exactos ni ausencia de límites. Para desactivar Ripley temporalmente, usa `RETAILERS=plazavea,oechsle`.
+No cambies el token ni el chat ID del grupo. Ripley tiene sus propios estados y reloj persistente: el primer descubrimiento no reinicia el de Plaza Vea ni Oechsle. Los candidatos se consultan durante cada ciclo rápido. **Solo Ripley repite su búsqueda normal cada dos minutos** (`RIPLEY_DISCOVERY_INTERVAL=120`); Plaza Vea mantiene `DISCOVERY_INTERVAL=14400` (cuatro horas), y Oechsle usa `OECHSLE_DISCOVERY_INTERVAL=120`. Los reintentos y el bloqueo son compartidos por el proceso; las tiendas se procesan secuencialmente, sin prometer periodos exactos ni ausencia de límites. Para desactivar Ripley temporalmente, usa `RETAILERS=plazavea,oechsle`.
 
 Un producto específico de Ripley puede configurarse en `MONITOR_PRODUCTS_JSON` con `"tienda":"Ripley"` y el enlace real a su ficha. Se revalida su identidad, vendedor Ripley, idioma y edición; tampoco se aceptan publicaciones de marketplace añadidas manualmente.
 
 ### Ripley: vuelta a la búsqueda normal
 
-Se revirtió el descubrimiento ampliado y su proceso separado. Ripley vuelve a usar únicamente la búsqueda pública con `Vendido por:Ripley`, sin recorrer sitemaps ni categorías. No se modificaró la búsqueda de Plaza Vea. La búsqueda de Ripley usa ahora `RIPLEY_DISCOVERY_INTERVAL=120` por defecto, aunque no agregues esa variable a tu `.env`; `DISCOVERY_INTERVAL` sigue rigiendo Plaza Vea y Oechsle.
+Se revirtió el descubrimiento ampliado y su proceso separado. Ripley vuelve a usar únicamente la búsqueda pública con `Vendido por:Ripley`, sin recorrer sitemaps ni categorías. No se modificaró la búsqueda de Plaza Vea. La búsqueda de Ripley usa ahora `RIPLEY_DISCOVERY_INTERVAL=120` por defecto, aunque no agregues esa variable a tu `.env`; `DISCOVERY_INTERVAL` sigue rigiendo Plaza Vea.
 
 El vencimiento se comprueba al iniciar cada ciclo. Con `MONITOR_INTERVAL=120`, Ripley vuelve a buscar después de la pausa y del tiempo de procesamiento. No es instantáneo ni garantiza exactamente 120 segundos entre inicios. Los fallos y 429 conservan sus esperas/reintentos; no se fuerza una búsqueda cada dos minutos frente a errores. Los antiguos `RIPLEY_DISCOVERY_MAX_*` se ignoran si quedaron en `.env`. No borres la base ni cambies token/chat. Los archivos de intercambio del explorador anterior ya no se procesan.
 
 Se conserva la limitación original: si Ripley no devuelve una ficha en su buscador, este modo no la descubrirá automáticamente, por muchas veces que se ejecute.
+
+### Oechsle: búsqueda normal cada dos minutos
+
+Oechsle usa ahora `OECHSLE_DISCOVERY_INTERVAL=120` por defecto. La medición real de las cuatro búsquedas, con pausa de 0.5 s entre peticiones, tardó 8.7 segundos y devolvió 40 publicaciones sin errores. Ese tiempo es orientativo y depende de la conexión y del servidor; no es instantáneo. No se cambia su API ni sus filtros. Plaza Vea conserva su API, historial y descubrimiento cada cuatro horas. Ripley conserva su búsqueda cada dos minutos y el filtro de ventas propias.
+
+No necesitas modificar `.env` si quieres ese valor por defecto. `MONITOR_INTERVAL=120` sigue siendo la pausa después de cada ciclo completo: Oechsle, Ripley y el seguimiento de productos guardados se ejecutan secuencialmente, por lo que los inicios pueden estar separados por más de 120 segundos. Los errores y 429 conservan el backoff; no se eliminan pausas ni límites. Para personalizarlo se puede agregar `OECHSLE_DISCOVERY_INTERVAL=120` sin tocar `DISCOVERY_INTERVAL` de Plaza Vea.
 
 ## Instalación
 
@@ -117,7 +123,7 @@ Edita `.env` localmente; nunca lo subas. Las variables ya exportadas prevalecen 
 
 ## Seguimiento rápido e intervalos de descubrimiento por tienda
 
-`--once` y `--loop` consultan detalles y stock de los candidatos guardados y de los productos configurados explícitamente. Además, hacen una búsqueda general **solo cuando toca**: al primer arranque sin fecha guardada y después cada cuatro horas para Plaza Vea/Oechsle, y cada dos minutos para Ripley. Las publicaciones pendientes se conservan pero no se consultan en cada revisión de stock.
+`--once` y `--loop` consultan detalles y stock de los candidatos guardados y de los productos configurados explícitamente. Además, hacen una búsqueda general **solo cuando toca**: al primer arranque sin fecha guardada y después cada cuatro horas para Plaza Vea, y cada dos minutos para Oechsle/Ripley. Las publicaciones pendientes se conservan pero no se consultan en cada revisión de stock.
 
 Configura en `.env` (los archivos existentes no se sobrescriben al actualizar):
 
@@ -138,7 +144,7 @@ DISCOVERY_RETRY_INTERVAL=900
 
 La fecha de la última búsqueda completada y la del último intento quedan en SQLite. Reiniciar el programa conserva los intervalos pendientes de cada tienda. Al actualizar desde la versión manual anterior, se hará un descubrimiento inicial porque todavía no existe esa fecha. Las búsquedas incompletas o fallidas conservan sus resultados parciales y los objetivos conocidos, sin marcar éxito; cuando corresponde un descubrimiento, el reintento espera 15 minutos por defecto, también tras reiniciar. Los fallos de stock o Telegram no invalidan por sí mismos una búsqueda completada.
 
-El planificador se comprueba al comenzar cada ciclo: el intervalo de cada tienda (cuatro horas para Plaza Vea/Oechsle, dos minutos para Ripley) es un mínimo entre búsquedas completadas y la siguiente puede empezar algo después, según el ciclo y las pausas. Los 120 segundos se esperan **después de terminar cada revisión**, no son un periodo exacto entre inicios. No hay tareas simultáneas: cuando toca descubrir, ese ciclo puede tardar más y luego continúa el seguimiento habitual.
+El planificador se comprueba al comenzar cada ciclo: el intervalo de cada tienda (cuatro horas para Plaza Vea, dos minutos para Oechsle/Ripley) es un mínimo entre búsquedas completadas y la siguiente puede empezar algo después, según el ciclo y las pausas. Los 120 segundos se esperan **después de terminar cada revisión**, no son un periodo exacto entre inicios. No hay tareas simultáneas: cuando toca descubrir, ese ciclo puede tardar más y luego continúa el seguimiento habitual.
 
 Para forzar `--discover` o listar mientras corre el bucle, deténlo con Ctrl+C y reinícialo después. El bloqueo impide ejecutar ambos simultáneamente. El descubrimiento guarda candidatos y pendientes y puede enviar alertas de nuevos candidatos disponibles. Reutiliza los detalles completos de búsqueda para evitar otra consulta por resultado. Los pendientes se reevalúan cuando reaparecen en un descubrimiento o están configurados explícitamente. No borres la base existente: conserva candidatos y transiciones sin repetir avisos de disponibilidad continua.
 

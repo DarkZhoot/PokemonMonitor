@@ -30,14 +30,14 @@ class RipleyIntervalTests(unittest.TestCase):
             scheduled_cycle(
                 Settings(), store, Mock(), Mock(), Mock(), retailer="Oechsle"
             )
-            self.assertFalse(cycle.call_args.kwargs["discover"])
+            self.assertTrue(cycle.call_args.kwargs["discover"])
         store.close()
 
     def test_profiles_have_independent_intervals(self):
         s = Settings()
         self.assertEqual(s.for_retailer("ripley").discovery_interval, 120)
         self.assertEqual(s.for_retailer("plazavea").discovery_interval, 14400)
-        self.assertEqual(s.for_retailer("oechsle").discovery_interval, 14400)
+        self.assertEqual(s.for_retailer("oechsle").discovery_interval, 120)
         self.assertEqual(s.discovery_interval, 14400)
 
     @patch("monitor.settings.load_dotenv")
