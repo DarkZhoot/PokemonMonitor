@@ -1,12 +1,50 @@
 # PokemonMonitor
 
-Monitor de **Pokémon TCG, 30.º aniversario, inglés**, inicialmente para Plaza Vea (Perú). Consulta solo el catálogo público y envía avisos por Telegram con enlaces para compra manual. No inicia sesión en cuentas de clientes, no añade al carrito y no compra ni paga.
+Monitor de **Pokémon TCG, 30.º aniversario, inglés**, para Plaza Vea y Oechsle (Perú). Consulta solo el catálogo público y envía avisos por Telegram con enlaces para compra manual. No inicia sesión en cuentas de clientes, no añade al carrito y no compra ni paga.
 
 ## Estado de la integración
 
 La implementación está probada con respuestas simuladas y consultas reales de catálogo. Tras el bloqueo inicial CONNECT 403, el acceso autorizado empezó a responder: una búsqueda devolvió 159 publicaciones y se comprobaron detalles por `fq=productId:...` y por `/slug/p`. Se observó una oferta del sobre 30.º aniversario con `IsAvailable=false` y cantidad cero; esto no certifica la entrega para una ubicación. La API consultada omitió `CurrencyCode`. Quedan pendientes la disponibilidad logística real, la exhaustividad del catálogo y el envío real de Telegram con tus credenciales. No hay evasión de bloqueos, CAPTCHA ni cambios para desactivar TLS.
 
 Por seguridad, `PLAZAVEA_CONTEXT_CONFIRMED=false` mantiene stock `DESCONOCIDO`. Antes de habilitar alertas de disponibilidad, sigue la verificación de integración al final. Establecerlo en `true` declara que has comprobado que las ofertas del catálogo en el canal/vendedor/variante elegidos representan tu contexto de compra. **No realiza por sí mismo una consulta de entrega.** Si necesitas disponibilidad por código postal, déjalo sin confirmar: esa integración no está implementada. Configurar `PLAZAVEA_POSTAL_CODE` mantiene estado desconocido para evitar inferencias falsas.
+
+## Oechsle y varias tiendas
+
+El monitor incluye adaptadores para Plaza Vea y Oechsle, con el mismo objetivo: Pokémon TCG del 30.º aniversario en inglés. Comparte criterios, cola de Telegram y pausa entre ciclos; conserva **productos, estados y fechas de descubrimiento independientes por tienda**. Un mismo ID en dos tiendas no comparte historial. Un fallo de una tienda no evita procesar la otra, aunque las consultas son secuenciales y un timeout puede alargar el ciclo.
+
+**Validación real de catálogo:** tras el bloqueo inicial CONNECT 403 del proxy, Oechsle respondió a las consultas autorizadas. Las cuatro búsquedas configuradas completaron su paginación y devolvieron 40 publicaciones, sin candidatos que confirmaran simultáneamente Pokémon TCG + 30.º aniversario + inglés. Se verificaron los detalles por ID del producto `3207764` (Booster Bundle Chaos Rising Pokémon Tcg Inglés), sus variantes y una oferta positiva con precio `149.9`, sin moneda explícita. Esa muestra es de otra expansión: no generó una alerta. Estas observaciones no prueban cobertura total ni disponibilidad por dirección, y pueden cambiar. Se añadió `www.oechsle.pe` al borrador de red; guardarlo no equivale a publicar el entorno. No se eluden bloqueos ni se desactiva TLS.
+
+Agrega estas líneas a tu `.env` existente (no cambies token ni chat del grupo):
+
+```dotenv
+RETAILERS=plazavea,oechsle
+OECHSLE_CONTEXT_CONFIRMED=true
+OECHSLE_POSTAL_CODE=
+OECHSLE_SALES_CHANNEL=
+OECHSLE_SELLER_ID=
+OECHSLE_SKU_ID=
+```
+
+`OECHSLE_CONTEXT_CONFIRMED=true` habilita exclusivamente la interpretación de ofertas generales del catálogo, conforme al modo solicitado por el usuario: **no verifica entregabilidad por dirección**. Puede dejarse en `false` para conservar `DESCONOCIDO`. Los filtros de Oechsle son independientes de `PLAZAVEA_*`; no se copia el vendedor/canal/SKU de otra tienda. Deja filtros vacíos para considerar todas las ofertas devueltas. Se conserva `PLAZAVEA_CONTEXT_CONFIRMED` tal como lo tengas.
+
+Después de detener el bucle con Ctrl+C, comprueba Oechsle de forma aislada:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --retailer oechsle --discover
+.\.venv\Scripts\python.exe main.py --retailer oechsle --list-products
+```
+
+Revisa los eventos `discovery_finished` y `search_incomplete` de Oechsle: un 403/429 es un error, no una búsqueda sin resultados ni stock agotado. Contrasta nombres, edición, idioma, enlaces y ofertas con las fichas públicas. Si hay candidatos disponibles, `--discover` puede enviar notificaciones reales al chat configurado. Una búsqueda completada sin candidatos no es un error; se vuelve a descubrir cuando corresponda. Si falla la integración real, conserva `RETAILERS=plazavea` para continuar solo con Plaza Vea y comparte los errores sin credenciales.
+
+Para ambas tiendas:
+
+```powershell
+.\.venv\Scripts\python.exe main.py --loop
+```
+
+Sin `--retailer` se usan ambas tiendas por defecto. `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Cada tienda se redescubre cada cuatro horas y reintenta descubrimientos vencidos fallidos tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
+
+Para configurar un producto específico de Oechsle en `MONITOR_PRODUCTS_JSON`, incluye `"tienda":"Oechsle"`, además de su URL e ID opcional. Si omites `tienda`, se interpreta como Plaza Vea por compatibilidad. La clasificación sigue exigiendo prueba de edición e idioma; un enlace manual no los confirma automáticamente.
 
 ## Instalación
 
@@ -261,6 +299,6 @@ El clasificador usa títulos, descripciones, especificaciones y variantes; sigue
 
 ## Arquitectura y revisión
 
-`monitor/models.py` define `Retailer` (búsqueda, detalles, stock y normalización). `tiendas/plaza_vea.py` es el único adaptador implementado. `monitor/app.py` coordina el ciclo; `store.py` conserva la lógica de transiciones/pendientes del monitor original mediante transacciones, `telegram.py` entrega avisos y `http.py` controla red. `tiendas/descubridor.py` conserva las entradas básicas de búsqueda/clasificación originales.
+`monitor/models.py` define `Retailer` (búsqueda, detalles, stock y normalización). `tiendas/plaza_vea.py` y `tiendas/oechsle.py` configuran los dos adaptadores; `tiendas/vtex.py` comparte clasificación, catálogo y reglas conservadoras de stock. `monitor/app.py` coordina el ciclo; `store.py` conserva la lógica de transiciones/pendientes del monitor original mediante transacciones, `telegram.py` entrega avisos y `http.py` controla red. `tiendas/descubridor.py` conserva las entradas básicas de búsqueda/clasificación originales.
 
 Los cambios se preparan en `feature/telegram-stock-monitor`; no se fusionan ni se publican automáticamente. Revisa el diff y valida la integración autorizada antes de operar alertas de stock en producción. Agregar otro retailer requerirá su adaptador, configuración y pruebas; Falabella y Ripley no están implementados.

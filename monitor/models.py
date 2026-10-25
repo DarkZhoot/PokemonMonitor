@@ -7,20 +7,29 @@ AGOTADO = "AGOTADO"
 DESCONOCIDO = "DESCONOCIDO"
 
 
-def normalize_url(url):
+RETAILERS = {
+    "Plaza Vea": ("plazavea", "www.plazavea.com.pe", "plazavea.com.pe"),
+    "Oechsle": ("oechsle", "www.oechsle.pe", "oechsle.pe"),
+}
+
+
+def normalize_url(url, retailer="Plaza Vea"):
+    if retailer not in RETAILERS:
+        raise ValueError("Retailer desconocido")
+    _, host, bare_host = RETAILERS[retailer]
     p = urlsplit(url)
     if (
         p.scheme not in ("http", "https")
-        or p.hostname not in ("www.plazavea.com.pe", "plazavea.com.pe")
+        or p.hostname not in (host, bare_host)
         or p.username
         or p.password
         or p.port not in (None, 80, 443)
     ):
-        raise ValueError("URL fuera de Plaza Vea")
+        raise ValueError("URL fuera del retailer seleccionado")
     path = unquote(p.path).rstrip("/")
     if not path.endswith("/p"):
         raise ValueError("URL no es de producto")
-    return urlunsplit(("https", "www.plazavea.com.pe", path, "", ""))
+    return urlunsplit(("https", host, path, "", ""))
 
 
 @dataclass
@@ -34,7 +43,7 @@ class Product:
 
     @property
     def key(self):
-        return "plazavea:" + self.id
+        return RETAILERS[self.retailer][0] + ":" + self.id
 
 
 @dataclass

@@ -65,6 +65,7 @@ class Client:
             if r.status_code == 416:
                 return None
             if r.status_code == 429:
+                self.blocked_status = 429
                 delay = retry_delay(r.headers.get("Retry-After"), 60)
                 self.blocked_until = time.time() + delay
                 raise RemoteError(429, delay)

@@ -35,30 +35,44 @@ class Store:
             for r in self.db.execute("SELECT data FROM products")
         ]
 
-    def discovery_due(self, interval, retry_interval, timestamp=None):
+    @staticmethod
+    def discovery_keys(retailer):
+        # Keep existing Plaza Vea timestamps without resetting its schedule.
+        prefix = "" if retailer == "Plaza Vea" else retailer.lower() + ":"
+        return prefix + "discovery_attempt", prefix + "discovery_success"
+
+    def discovery_due(
+        self, interval, retry_interval, timestamp=None, retailer="Plaza Vea"
+    ):
         timestamp = time.time() if timestamp is None else timestamp
+        attempt_key, success_key = self.discovery_keys(retailer)
         rows = dict(
             self.db.execute(
-                "SELECT key,value FROM meta WHERE key IN ('discovery_attempt', 'discovery_success')"
+                "SELECT key,value FROM meta WHERE key IN (?,?)",
+                (attempt_key, success_key),
             ).fetchall()
         )
-        success = (
-            float(rows["discovery_success"]) if "discovery_success" in rows else None
-        )
-        attempt = (
-            float(rows["discovery_attempt"]) if "discovery_attempt" in rows else None
-        )
+        success = float(rows[success_key]) if success_key in rows else None
+        attempt = float(rows[attempt_key]) if attempt_key in rows else None
         if success is not None and timestamp - success < interval:
             return False
         if success is not None and (attempt is None or attempt <= success):
             return True
         return attempt is None or timestamp - attempt >= retry_interval
 
-    def mark_discovery(self, successful=False):
-        key = "discovery_success" if successful else "discovery_attempt"
+    def has_discovery_success(self, retailer="Plaza Vea"):
+        key = self.discovery_keys(retailer)[1]
+        return (
+            self.db.execute("SELECT 1 FROM meta WHERE key=?", (key,)).fetchone()
+            is not None
+        )
+
+    def mark_discovery(self, successful=False, retailer="Plaza Vea"):
+        keys = self.discovery_keys(retailer)
         with self.db:
             self.db.execute(
-                "INSERT OR REPLACE INTO meta VALUES(?,?)", (key, str(time.time()))
+                "INSERT OR REPLACE INTO meta VALUES(?,?)",
+                (keys[1 if successful else 0], str(time.time())),
             )
 
     def migrate(self, root):
@@ -122,7 +136,8 @@ class Store:
             "SELECT key,data FROM products WHERE key<>?", (product.key,)
         ).fetchall()
         for row in rows:
-            if json.loads(row["data"])["url"] == product.url:
+            other = json.loads(row["data"])
+            if other["retailer"] == product.retailer and other["url"] == product.url:
                 if not self.db.execute(
                     "SELECT 1 FROM products WHERE key=?", (product.key,)
                 ).fetchone():

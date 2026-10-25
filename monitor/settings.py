@@ -1,6 +1,6 @@
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -54,6 +54,26 @@ class Settings:
     sales_channel: str = ""
     seller_id: str = ""
     sku_id: str = ""
+    retailers: list = field(default_factory=lambda: ["plazavea", "oechsle"])
+    oechsle_context_confirmed: bool = True
+    oechsle_postal_code: str = ""
+    oechsle_sales_channel: str = ""
+    oechsle_seller_id: str = ""
+    oechsle_sku_id: str = ""
+
+    def for_retailer(self, name):
+        if name == "plazavea":
+            return self
+        if name != "oechsle":
+            raise ValueError("Retailer desconocido")
+        return replace(
+            self,
+            context_confirmed=self.oechsle_context_confirmed,
+            postal_code=self.oechsle_postal_code,
+            sales_channel=self.oechsle_sales_channel,
+            seller_id=self.oechsle_seller_id,
+            sku_id=self.oechsle_sku_id,
+        )
 
     @classmethod
     def load(cls):
@@ -114,4 +134,20 @@ class Settings:
         )
         for attr in ["postal_code", "sales_channel", "seller_id", "sku_id"]:
             setattr(s, attr, os.getenv("PLAZAVEA_" + attr.upper(), ""))
+        s.retailers = list(
+            dict.fromkeys(
+                x.strip().lower()
+                for x in os.getenv("RETAILERS", "plazavea,oechsle").split(",")
+                if x.strip()
+            )
+        )
+        if not s.retailers or any(
+            x not in ("plazavea", "oechsle") for x in s.retailers
+        ):
+            raise ValueError("RETAILERS: usa plazavea,oechsle")
+        s.oechsle_context_confirmed = (
+            os.getenv("OECHSLE_CONTEXT_CONFIRMED", "true").strip().lower() == "true"
+        )
+        for attr in ["postal_code", "sales_channel", "seller_id", "sku_id"]:
+            setattr(s, "oechsle_" + attr, os.getenv("OECHSLE_" + attr.upper(), ""))
         return s

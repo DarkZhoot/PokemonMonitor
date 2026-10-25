@@ -11,6 +11,7 @@ from monitor.settings import Settings, ROOT
 from monitor.store import Store, now
 from monitor.telegram import Telegram, deliver
 from tiendas.plaza_vea import PlazaVea
+from tiendas.oechsle import Oechsle
 
 
 def configure(settings):
@@ -38,31 +39,44 @@ def configure(settings):
     return log
 
 
-def cycle(settings, store, adapter, telegram, log, *, discover=False):
+def cycle(
+    settings, store, adapter, telegram, log, *, discover=False, retailer="Plaza Vea"
+):
     started = time.monotonic()
     healthy = True
     deliver(store, telegram, log)
     result = None
     if discover:
-        store.mark_discovery()
-        log("discovery_started")
+        store.mark_discovery(retailer=retailer)
+        log("discovery_started", retailer=retailer)
         try:
             result = adapter.search()
         except Exception:
-            log("search_failure", error="Error inesperado del adaptador")
+            log(
+                "search_failure",
+                retailer=retailer,
+                error="Error inesperado del adaptador",
+            )
             healthy = False
         if result and not result.complete:
             healthy = False
-            log("search_incomplete", errors=result.errors)
-    saved = store.products()
+            log("search_incomplete", retailer=retailer, errors=result.errors)
+    saved = [p for p in store.products() if p.retailer == retailer]
     # Normal polling visits confirmed targets only; uncertain catalog entries stay stored.
     products = {p.key: p for p in saved if p.classification == "CANDIDATO"}
     saved_by_url = {p.url: p for p in saved}
     for raw in PRODUCTOS + settings.products:
-        url = normalize_url(raw["url"])
+        if raw.get("tienda", "Plaza Vea") != retailer:
+            continue
+        url = normalize_url(raw["url"], retailer)
         p = saved_by_url.get(url)
         if p is None:
-            p = Product(str(raw.get("id") or "url:" + url), raw.get("nombre", ""), url)
+            p = Product(
+                str(raw.get("id") or "url:" + url),
+                raw.get("nombre", ""),
+                url,
+                retailer=retailer,
+            )
         products[p.key] = p
     fresh = set()
     if result:
@@ -78,9 +92,14 @@ def cycle(settings, store, adapter, telegram, log, *, discover=False):
     if not products:
         log(
             "no_targets",
-            instruction="Ejecuta --discover o configura productos específicos",
+            retailer=retailer,
+            instruction="Sin candidatos confirmados; se conserva el descubrimiento periódico",
         )
-        healthy = False
+        if not (
+            (result is not None and result.complete)
+            or store.has_discovery_success(retailer)
+        ):
+            healthy = False
     seen = set()
     for product in products.values():
         product_started = time.monotonic()
@@ -109,6 +128,7 @@ def cycle(settings, store, adapter, telegram, log, *, discover=False):
             healthy = False
         log(
             "product_checked",
+            retailer=retailer,
             product_key=p.key,
             classification=p.classification,
             state=stock.state,
@@ -120,9 +140,10 @@ def cycle(settings, store, adapter, telegram, log, *, discover=False):
     if discover:
         complete = result is not None and result.complete
         if complete:
-            store.mark_discovery(successful=True)
+            store.mark_discovery(successful=True, retailer=retailer)
         log(
             "discovery_finished",
+            retailer=retailer,
             complete=complete,
             found_products=len(result.products) if result is not None else 0,
         )
@@ -135,6 +156,7 @@ def cycle(settings, store, adapter, telegram, log, *, discover=False):
     ).fetchone()[0]
     log(
         "cycle_finished",
+        retailer=retailer,
         healthy=healthy,
         delivery_ok=delivered,
         failed_events=failed,
@@ -146,11 +168,49 @@ def cycle(settings, store, adapter, telegram, log, *, discover=False):
     return healthy and delivered and not failed and not pending
 
 
-def scheduled_cycle(settings, store, adapter, telegram, log, *, force_discovery=False):
+def scheduled_cycle(
+    settings,
+    store,
+    adapter,
+    telegram,
+    log,
+    *,
+    force_discovery=False,
+    retailer="Plaza Vea",
+):
     due = force_discovery or store.discovery_due(
-        settings.discovery_interval, settings.discovery_retry_interval
+        settings.discovery_interval,
+        settings.discovery_retry_interval,
+        retailer=retailer,
     )
-    return cycle(settings, store, adapter, telegram, log, discover=due)
+    return cycle(
+        settings, store, adapter, telegram, log, discover=due, retailer=retailer
+    )
+
+
+def run_retailers(settings, store, adapters, telegram, log, *, force_discovery=False):
+    outcomes = []
+    for retailer, (retailer_settings, adapter) in adapters.items():
+        try:
+            outcomes.append(
+                scheduled_cycle(
+                    retailer_settings,
+                    store,
+                    adapter,
+                    telegram,
+                    log,
+                    force_discovery=force_discovery,
+                    retailer=retailer,
+                )
+            )
+        except Exception:
+            log(
+                "retailer_failed",
+                retailer=retailer,
+                error="Error interno; otras tiendas continuarán",
+            )
+            outcomes.append(False)
+    return bool(outcomes) and all(outcomes)
 
 
 def main():
@@ -180,6 +240,11 @@ def main():
         action="store_true",
         help="Mostrar candidatos guardados y sus enlaces, sin consultar la tienda",
     )
+    parser.add_argument(
+        "--retailer",
+        choices=["plazavea", "oechsle"],
+        help="Limitar esta ejecución a una tienda",
+    )
     args = parser.parse_args()
     settings = Settings.load()
     log = configure(settings)
@@ -192,9 +257,18 @@ def main():
                     print(
                         json.dumps(
                             [
-                                {"id": p.id, "nombre": p.name, "url": p.url}
+                                {
+                                    "id": p.id,
+                                    "nombre": p.name,
+                                    "url": p.url,
+                                    "tienda": p.retailer,
+                                }
                                 for p in store.products()
                                 if p.classification == "CANDIDATO"
+                                and (
+                                    not args.retailer
+                                    or p.key.startswith(args.retailer + ":")
+                                )
                             ],
                             ensure_ascii=False,
                             indent=2,
@@ -223,13 +297,21 @@ def main():
                         )
                     log("failed_events_reactivated")
                     return 0
-                adapter = PlazaVea(settings)
+                enabled = [args.retailer] if args.retailer else settings.retailers
+                adapters = {}
+                for slug, name, factory in [
+                    ("plazavea", "Plaza Vea", PlazaVea),
+                    ("oechsle", "Oechsle", Oechsle),
+                ]:
+                    if slug in enabled:
+                        selected = settings.for_retailer(slug)
+                        adapters[name] = (selected, factory(selected))
                 while True:
                     try:
-                        ok = scheduled_cycle(
+                        ok = run_retailers(
                             settings,
                             store,
-                            adapter,
+                            adapters,
                             telegram,
                             log,
                             force_discovery=args.discover,
