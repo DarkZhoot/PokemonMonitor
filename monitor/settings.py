@@ -61,6 +61,7 @@ class Settings:
     oechsle_seller_id: str = ""
     oechsle_sku_id: str = ""
 
+    ripley_discovery_interval: int = 120
     ripley_context_confirmed: bool = True
     ripley_postal_code: str = ""
     ripley_sales_channel: str = ""
@@ -72,7 +73,7 @@ class Settings:
             return self
         if name not in ("oechsle", "ripley"):
             raise ValueError("Retailer desconocido")
-        return replace(
+        selected = replace(
             self,
             **{
                 attr: getattr(self, name + "_" + attr)
@@ -86,6 +87,10 @@ class Settings:
             },
         )
 
+        if name == "ripley":
+            selected.discovery_interval = self.ripley_discovery_interval
+        return selected
+
     @classmethod
     def load(cls):
         load_dotenv(ROOT / ".env", override=False)
@@ -93,6 +98,7 @@ class Settings:
         for attr, env, minimum in [
             ("interval", "MONITOR_INTERVAL", 60),
             ("discovery_interval", "DISCOVERY_INTERVAL", 60),
+            ("ripley_discovery_interval", "RIPLEY_DISCOVERY_INTERVAL", 60),
             ("discovery_retry_interval", "DISCOVERY_RETRY_INTERVAL", 60),
             ("timeout", "MONITOR_TIMEOUT", 1),
             ("retries", "MONITOR_RETRIES", 0),
@@ -106,6 +112,7 @@ class Settings:
                 > {
                     "interval": 86400,
                     "discovery_interval": 604800,
+                    "ripley_discovery_interval": 604800,
                     "discovery_retry_interval": 86400,
                     "timeout": 120,
                     "retries": 5,

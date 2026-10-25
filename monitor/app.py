@@ -186,8 +186,13 @@ def scheduled_cycle(
     force_discovery=False,
     retailer="Plaza Vea",
 ):
+    interval = (
+        settings.ripley_discovery_interval
+        if retailer == "Ripley"
+        else settings.discovery_interval
+    )
     due = force_discovery or store.discovery_due(
-        settings.discovery_interval,
+        interval,
         settings.discovery_retry_interval,
         retailer=retailer,
     )

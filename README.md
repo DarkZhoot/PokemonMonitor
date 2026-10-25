@@ -42,7 +42,7 @@ Para ambas tiendas:
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las tres). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Cada tienda se redescubre cada cuatro horas y reintenta descubrimientos vencidos fallidos tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
+Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las tres). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Plaza Vea y Oechsle se redescubren cada cuatro horas; Ripley cada dos minutos. Los descubrimientos vencidos fallidos reintentan tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
 
 Para configurar un producto específico de Oechsle en `MONITOR_PRODUCTS_JSON`, incluye `"tienda":"Oechsle"`, además de su URL e ID opcional. Si omites `tienda`, se interpreta como Plaza Vea por compatibilidad. La clasificación sigue exigiendo prueba de edición e idioma; un enlace manual no los confirma automáticamente.
 
@@ -62,6 +62,7 @@ Añade a tu `.env` existente:
 
 ```dotenv
 RETAILERS=plazavea,oechsle,ripley
+RIPLEY_DISCOVERY_INTERVAL=120
 RIPLEY_CONTEXT_CONFIRMED=true
 RIPLEY_POSTAL_CODE=
 RIPLEY_SALES_CHANNEL=
@@ -82,9 +83,17 @@ Después de detener el proceso anterior con Ctrl+C:
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-No cambies el token ni el chat ID del grupo. Ripley tiene sus propios estados y reloj persistente: el primer descubrimiento no reinicia el de Plaza Vea ni Oechsle. Los candidatos se consultan durante cada ciclo rápido y las búsquedas generales se repiten aproximadamente cada cuatro horas por tienda. Los reintentos y el bloqueo son compartidos por el proceso; las tiendas se procesan secuencialmente, sin prometer periodos exactos ni ausencia de límites. Para desactivar Ripley temporalmente, usa `RETAILERS=plazavea,oechsle`.
+No cambies el token ni el chat ID del grupo. Ripley tiene sus propios estados y reloj persistente: el primer descubrimiento no reinicia el de Plaza Vea ni Oechsle. Los candidatos se consultan durante cada ciclo rápido. **Solo Ripley repite su búsqueda normal cada dos minutos** (`RIPLEY_DISCOVERY_INTERVAL=120`); Plaza Vea y Oechsle mantienen `DISCOVERY_INTERVAL=14400` (cuatro horas). Los reintentos y el bloqueo son compartidos por el proceso; las tiendas se procesan secuencialmente, sin prometer periodos exactos ni ausencia de límites. Para desactivar Ripley temporalmente, usa `RETAILERS=plazavea,oechsle`.
 
 Un producto específico de Ripley puede configurarse en `MONITOR_PRODUCTS_JSON` con `"tienda":"Ripley"` y el enlace real a su ficha. Se revalida su identidad, vendedor Ripley, idioma y edición; tampoco se aceptan publicaciones de marketplace añadidas manualmente.
+
+### Ripley: vuelta a la búsqueda normal
+
+Se revirtió el descubrimiento ampliado y su proceso separado. Ripley vuelve a usar únicamente la búsqueda pública con `Vendido por:Ripley`, sin recorrer sitemaps ni categorías. No se modificaró la búsqueda de Plaza Vea. La búsqueda de Ripley usa ahora `RIPLEY_DISCOVERY_INTERVAL=120` por defecto, aunque no agregues esa variable a tu `.env`; `DISCOVERY_INTERVAL` sigue rigiendo Plaza Vea y Oechsle.
+
+El vencimiento se comprueba al iniciar cada ciclo. Con `MONITOR_INTERVAL=120`, Ripley vuelve a buscar después de la pausa y del tiempo de procesamiento. No es instantáneo ni garantiza exactamente 120 segundos entre inicios. Los fallos y 429 conservan sus esperas/reintentos; no se fuerza una búsqueda cada dos minutos frente a errores. Los antiguos `RIPLEY_DISCOVERY_MAX_*` se ignoran si quedaron en `.env`. No borres la base ni cambies token/chat. Los archivos de intercambio del explorador anterior ya no se procesan.
+
+Se conserva la limitación original: si Ripley no devuelve una ficha en su buscador, este modo no la descubrirá automáticamente, por muchas veces que se ejecute.
 
 ## Instalación
 
@@ -106,9 +115,9 @@ Copy-Item .env.example .env
 
 Edita `.env` localmente; nunca lo subas. Las variables ya exportadas prevalecen sobre `.env`. No pegues tokens en comandos, capturas, issues ni logs. En Linux limita el acceso con `chmod 600 .env`.
 
-## Seguimiento rápido y descubrimiento cada cuatro horas
+## Seguimiento rápido e intervalos de descubrimiento por tienda
 
-`--once` y `--loop` consultan detalles y stock de los candidatos guardados y de los productos configurados explícitamente. Además, hacen una búsqueda general **solo cuando toca**: al primer arranque sin fecha guardada y después cada cuatro horas. Las publicaciones pendientes se conservan pero no se consultan en cada revisión de stock.
+`--once` y `--loop` consultan detalles y stock de los candidatos guardados y de los productos configurados explícitamente. Además, hacen una búsqueda general **solo cuando toca**: al primer arranque sin fecha guardada y después cada cuatro horas para Plaza Vea/Oechsle, y cada dos minutos para Ripley. Las publicaciones pendientes se conservan pero no se consultan en cada revisión de stock.
 
 Configura en `.env` (los archivos existentes no se sobrescriben al actualizar):
 
@@ -127,9 +136,9 @@ DISCOVERY_RETRY_INTERVAL=900
 .\.venv\Scripts\python.exe main.py --discover
 ```
 
-La fecha de la última búsqueda completada y la del último intento quedan en SQLite. Reiniciar el programa no reinicia las cuatro horas. Al actualizar desde la versión manual anterior, se hará un descubrimiento inicial porque todavía no existe esa fecha. Las búsquedas incompletas o fallidas conservan sus resultados parciales y los objetivos conocidos, sin marcar éxito; cuando corresponde un descubrimiento, el reintento espera 15 minutos por defecto, también tras reiniciar. Los fallos de stock o Telegram no invalidan por sí mismos una búsqueda completada.
+La fecha de la última búsqueda completada y la del último intento quedan en SQLite. Reiniciar el programa conserva los intervalos pendientes de cada tienda. Al actualizar desde la versión manual anterior, se hará un descubrimiento inicial porque todavía no existe esa fecha. Las búsquedas incompletas o fallidas conservan sus resultados parciales y los objetivos conocidos, sin marcar éxito; cuando corresponde un descubrimiento, el reintento espera 15 minutos por defecto, también tras reiniciar. Los fallos de stock o Telegram no invalidan por sí mismos una búsqueda completada.
 
-El planificador se comprueba al comenzar cada ciclo: las cuatro horas son un mínimo entre búsquedas completadas y la siguiente puede empezar algo después, según el ciclo y las pausas. Los 120 segundos se esperan **después de terminar cada revisión**, no son un periodo exacto entre inicios. No hay tareas simultáneas: cuando toca descubrir, ese ciclo puede tardar más y luego continúa el seguimiento habitual.
+El planificador se comprueba al comenzar cada ciclo: el intervalo de cada tienda (cuatro horas para Plaza Vea/Oechsle, dos minutos para Ripley) es un mínimo entre búsquedas completadas y la siguiente puede empezar algo después, según el ciclo y las pausas. Los 120 segundos se esperan **después de terminar cada revisión**, no son un periodo exacto entre inicios. No hay tareas simultáneas: cuando toca descubrir, ese ciclo puede tardar más y luego continúa el seguimiento habitual.
 
 Para forzar `--discover` o listar mientras corre el bucle, deténlo con Ctrl+C y reinícialo después. El bloqueo impide ejecutar ambos simultáneamente. El descubrimiento guarda candidatos y pendientes y puede enviar alertas de nuevos candidatos disponibles. Reutiliza los detalles completos de búsqueda para evitar otra consulta por resultado. Los pendientes se reevalúan cuando reaparecen en un descubrimiento o están configurados explícitamente. No borres la base existente: conserva candidatos y transiciones sin repetir avisos de disponibilidad continua.
 
