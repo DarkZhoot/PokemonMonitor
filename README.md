@@ -25,7 +25,7 @@ OECHSLE_SELLER_ID=
 OECHSLE_SKU_ID=
 ```
 
-`OECHSLE_CONTEXT_CONFIRMED=true` habilita exclusivamente la interpretación de ofertas generales del catálogo, conforme al modo solicitado por el usuario: **no verifica entregabilidad por dirección**. Puede dejarse en `false` para conservar `DESCONOCIDO`. Los filtros de Oechsle son independientes de `PLAZAVEA_*`; no se copia el vendedor/canal/SKU de otra tienda. Deja filtros vacíos para considerar todas las ofertas devueltas. Se conserva `PLAZAVEA_CONTEXT_CONFIRMED` tal como lo tengas.
+`OECHSLE_CONTEXT_CONFIRMED=true` habilita exclusivamente la interpretación de ofertas propias de Oechsle: **no verifica entregabilidad por dirección**. Puede dejarse en `false` para conservar `DESCONOCIDO`. Los filtros de Oechsle son independientes de `PLAZAVEA_*`; no se copia el vendedor/canal/SKU de otra tienda. Deja los filtros adicionales vacíos; solo se consideran las ofertas propias de Oechsle. Se conserva `PLAZAVEA_CONTEXT_CONFIRMED` tal como lo tengas.
 
 Después de detener el bucle con Ctrl+C, comprueba Oechsle de forma aislada:
 
@@ -45,6 +45,16 @@ Para ambas tiendas:
 Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las tres). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Plaza Vea se redescubre cada cuatro horas; Oechsle y Ripley cada dos minutos. Los descubrimientos vencidos fallidos reintentan tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
 
 Para configurar un producto específico de Oechsle en `MONITOR_PRODUCTS_JSON`, incluye `"tienda":"Oechsle"`, además de su URL e ID opcional. Si omites `tienda`, se interpreta como Plaza Vea por compatibilidad. La clasificación sigue exigiendo prueba de edición e idioma; un enlace manual no los confirma automáticamente.
+
+### Oechsle: exclusivamente vendido por Oechsle
+
+La API usa `fq=sellerId:1` en las búsquedas. Además, cada producto debe declarar **`Vendido por: Oechsle`** para ser candidato. No basta con que incluya un vendedor `1`: las publicaciones de Plaza Vea pueden contener una oferta vacía de Oechsle como marcador, y eso no convierte el producto en venta propia. Se descartan Plaza Vea y marketplace dentro de Oechsle, y la propiedad desconocida queda pendiente sin alertas.
+
+El stock/precio se calculan únicamente con ofertas del vendedor propio (`sellerId=1`, nombre Oechsle cuando se informa). Ofertas de terceros disponibles no pueden hacer que se marque disponible una oferta propia agotada. Datos contradictorios o incompletos siguen como desconocidos. No se modifica el adaptador de Plaza Vea ni el de Ripley.
+
+Al actualizar se retiran del seguimiento los productos externos previamente guardados y se cancelan sus avisos pendientes/fallidos sin borrar los registros ni las alertas enviadas. Los eventos nuevos conservan la confirmación del alcance. Solo se reinicia una vez el reloj de Oechsle para hacer inmediatamente una búsqueda filtrada; sus búsquedas siguen cada dos minutos. No borres `runtime` ni cambies token/chat, y no necesitas configurar `OECHSLE_SELLER_ID`.
+
+Validación real: las cuatro búsquedas con el nuevo filtro terminaron en 3.6 segundos, conservaron 4 publicaciones y todas declararon `Vendido por: Oechsle`; no hubo candidatos confirmados del aniversario e idioma objetivo en esa ejecución. Se verificó una oferta positiva propia del producto `3207764` y se rechazó el producto `1002012431`, vendido por Plaza Vea pese a tener el marcador vacío del vendedor `1`.
 
 ## Ripley
 

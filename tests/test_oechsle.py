@@ -20,6 +20,7 @@ URL = "https://www.oechsle.pe/pokemon-30-aniversario/p"
 
 def fixture():
     return {
+        "Vendido por": ["Oechsle"],
         "productId": "123",
         "productName": "Pokemon TCG 30 aniversario English",
         "link": URL,

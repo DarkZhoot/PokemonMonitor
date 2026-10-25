@@ -3,7 +3,7 @@ import time
 import requests
 from monitor.http import retry_delay
 from monitor.store import now
-from monitor.sellers import enforce_ripley_scope
+from monitor.sellers import enforce_seller_scopes
 
 
 class Telegram:
@@ -57,7 +57,7 @@ class Telegram:
 
 
 def deliver(store, telegram, log):
-    enforce_ripley_scope(store, log)
+    enforce_seller_scopes(store, log)
     if not telegram.settings.token or not telegram.settings.chat_id:
         pending = store.db.execute(
             "SELECT count(*) FROM events WHERE status='pending'"

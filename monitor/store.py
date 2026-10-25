@@ -6,7 +6,7 @@ from datetime import datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 from monitor.models import Product, Stock, normalize_url
-from monitor.sellers import restrict_ripley
+from monitor.sellers import restrict_ripley, restrict_oechsle
 
 
 def now():
@@ -154,6 +154,7 @@ class Store:
 
     def observe(self, product, stock):
         restrict_ripley(product)
+        restrict_oechsle(product)
         with self.db:
             self.merge_identity(product)
             old = self.db.execute(
@@ -197,6 +198,8 @@ class Store:
                 )
                 if product.retailer == "Ripley":
                     event["seller_scope"] = "ripley_direct_v1"
+                elif product.retailer == "Oechsle":
+                    event["seller_scope"] = "oechsle_direct_v1"
                 self.db.execute(
                     "INSERT INTO events(id,product_key,payload) VALUES(?,?,?)",
                     (event["id"], product.key, json.dumps(event, ensure_ascii=False)),
