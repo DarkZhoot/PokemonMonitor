@@ -1,6 +1,6 @@
 # PokemonMonitor
 
-Monitor de **Pokémon TCG, 30.º aniversario, inglés**, para Plaza Vea y Oechsle (Perú). Consulta solo el catálogo público y envía avisos por Telegram con enlaces para compra manual. No inicia sesión en cuentas de clientes, no añade al carrito y no compra ni paga.
+Monitor de **Pokémon TCG, 30.º aniversario, inglés**, para Plaza Vea, Oechsle y Ripley (Perú). Consulta solo el catálogo público y envía avisos por Telegram con enlaces para compra manual. No inicia sesión en cuentas de clientes, no añade al carrito y no compra ni paga.
 
 ## Estado de la integración
 
@@ -42,9 +42,45 @@ Para ambas tiendas:
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-Sin `--retailer` se usan ambas tiendas por defecto. `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Cada tienda se redescubre cada cuatro horas y reintenta descubrimientos vencidos fallidos tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
+Sin `--retailer` se usan las tiendas configuradas en `RETAILERS` (por defecto las tres). `--retailer plazavea` u `--retailer oechsle` permite limitar cualquier ejecución (también `--once`, `--discover`, `--list-products`, `--loop`). No ejecutes dos procesos contra la misma base. Al incorporar Oechsle se hace su primer descubrimiento, sin reiniciar el reloj guardado de Plaza Vea. Cada tienda se redescubre cada cuatro horas y reintenta descubrimientos vencidos fallidos tras quince minutos. Las alertas incluyen el nombre de la tienda y su enlace directo.
 
 Para configurar un producto específico de Oechsle en `MONITOR_PRODUCTS_JSON`, incluye `"tienda":"Oechsle"`, además de su URL e ID opcional. Si omites `tienda`, se interpreta como Plaza Vea por compatibilidad. La clasificación sigue exigiendo prueba de edición e idioma; un enlace manual no los confirma automáticamente.
+
+## Ripley
+
+Se añadió un adaptador separado en `tiendas/ripley.py`: **Ripley no usa el contrato VTEX** de las otras tiendas. Lee el HTML público devuelto por el servidor, los productos de `__NEXT_DATA__.props.pageProps.findabilityProps.data` y sus enlaces reales. Para los detalles lee schema.org `Product`/`Offer`. No ejecuta JavaScript, no inicia sesión y no intenta resolver CAPTCHA ni cambiar de proxy para evadir restricciones.
+
+Validación real: tras el bloqueo inicial del proxy, la búsqueda configurada terminó en 9.7 segundos, con **101 publicaciones conservadas y 12 candidatos**, todos señalados como disponibles por el catálogo en ese momento. Hay ofertas de **marketplace**. Se contrastó una ficha de ETB en inglés (`PMP20001667733`) con la oferta schema.org `InStock`, precio `789 PEN` y vendedor `UNALUKA INTERNACIONAL`. Son observaciones puntuales, no una garantía de stock futuro ni entrega a una dirección. Los productos en español/chino se excluyen según la configuración; información insuficiente queda pendiente. No se envió Telegram real desde Codex porque no hay credenciales configuradas; los eventos quedaron en la cola local de pruebas de esta instancia, sin afectar tu base de Windows.
+
+La identidad utiliza el identificador nativo o marketplace del enlace (`203...P` o `PMP...`), no la URL de marca/SKU de algunos bloques SEO. Esto evita confundir enlaces de listado con la ficha de compra. La paginación comprueba `offset`, `limit` y `total`; no asume que una sola página contiene todo. Al alcanzar `SEARCH_MAX_PAGES`, se informa búsqueda incompleta. Si el HTML cambia, faltan metadatos o se recibe 403/429, conserva los productos y no inventa stock.
+
+Añade a tu `.env` existente:
+
+```dotenv
+RETAILERS=plazavea,oechsle,ripley
+RIPLEY_CONTEXT_CONFIRMED=true
+RIPLEY_POSTAL_CODE=
+RIPLEY_SALES_CHANNEL=
+RIPLEY_SELLER_ID=
+RIPLEY_SKU_ID=
+```
+
+`RIPLEY_CONTEXT_CONFIRMED=true` habilita la interpretación de disponibilidad pública general, conforme al modo solicitado. **Los filtros de ubicación, canal, vendedor y SKU no están implementados** en este adaptador; dejarlos vacíos. Si se configuran, devuelve desconocido en lugar de ignorarlos. Ripley considera `inStock` booleano explícito del listado, o `InStock`/`OutOfStock` en todas las ofertas interpretables de la ficha. Preventa, ausencia de disponibilidad y ofertas ambiguas no se convierten en agotado. Precio y moneda solo se muestran cuando están informados de forma interpretable. El estado corresponde al catálogo consultado y puede depender de la variante publicada; la entrega se comprueba manualmente al abrir la ficha.
+
+Después de detener el proceso anterior con Ctrl+C:
+
+```powershell
+# Descubrir solo Ripley: puede enviar alertas reales si encuentra stock.
+.\.venv\Scripts\python.exe main.py --retailer ripley --discover
+# Mostrar enlaces guardados de Ripley, sin red.
+.\.venv\Scripts\python.exe main.py --retailer ripley --list-products
+# Continuar con las tres tiendas.
+.\.venv\Scripts\python.exe main.py --loop
+```
+
+No cambies el token ni el chat ID del grupo. Ripley tiene sus propios estados y reloj persistente: el primer descubrimiento no reinicia el de Plaza Vea ni Oechsle. Los candidatos se consultan durante cada ciclo rápido y las búsquedas generales se repiten aproximadamente cada cuatro horas por tienda. Los reintentos y el bloqueo son compartidos por el proceso; las tiendas se procesan secuencialmente, sin prometer periodos exactos ni ausencia de límites. Para desactivar Ripley temporalmente, usa `RETAILERS=plazavea,oechsle`.
+
+Un producto específico de Ripley puede configurarse en `MONITOR_PRODUCTS_JSON` con `"tienda":"Ripley"` y el enlace real a su ficha. Se revalida su identidad, idioma y edición; no se acepta como objetivo solo por añadirlo manualmente.
 
 ## Instalación
 
@@ -299,6 +335,6 @@ El clasificador usa títulos, descripciones, especificaciones y variantes; sigue
 
 ## Arquitectura y revisión
 
-`monitor/models.py` define `Retailer` (búsqueda, detalles, stock y normalización). `tiendas/plaza_vea.py` y `tiendas/oechsle.py` configuran los dos adaptadores; `tiendas/vtex.py` comparte clasificación, catálogo y reglas conservadoras de stock. `monitor/app.py` coordina el ciclo; `store.py` conserva la lógica de transiciones/pendientes del monitor original mediante transacciones, `telegram.py` entrega avisos y `http.py` controla red. `tiendas/descubridor.py` conserva las entradas básicas de búsqueda/clasificación originales.
+`monitor/models.py` define `Retailer` (búsqueda, detalles, stock y normalización). `tiendas/plaza_vea.py` y `tiendas/oechsle.py` configuran los dos adaptadores VTEX; `tiendas/vtex.py` comparte clasificación, catálogo y reglas conservadoras de stock. `tiendas/ripley.py` añade el adaptador de HTML/datos estructurados para Ripley. `monitor/app.py` coordina el ciclo; `store.py` conserva la lógica de transiciones/pendientes del monitor original mediante transacciones, `telegram.py` entrega avisos y `http.py` controla red. `tiendas/descubridor.py` conserva las entradas básicas de búsqueda/clasificación originales.
 
-Los cambios se preparan en `feature/telegram-stock-monitor`; no se fusionan ni se publican automáticamente. Revisa el diff y valida la integración autorizada antes de operar alertas de stock en producción. Agregar otro retailer requerirá su adaptador, configuración y pruebas; Falabella y Ripley no están implementados.
+Los cambios se preparan en `feature/telegram-stock-monitor`; no se fusionan ni se publican automáticamente. Revisa el diff y valida la integración autorizada antes de operar alertas de stock en producción. Agregar otro retailer requerirá su adaptador, configuración y pruebas; Falabella no está implementado.

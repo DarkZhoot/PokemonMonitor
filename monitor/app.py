@@ -12,6 +12,7 @@ from monitor.store import Store, now
 from monitor.telegram import Telegram, deliver
 from tiendas.plaza_vea import PlazaVea
 from tiendas.oechsle import Oechsle
+from tiendas.ripley import Ripley
 
 
 def configure(settings):
@@ -104,7 +105,11 @@ def cycle(
     for product in products.values():
         product_started = time.monotonic()
         try:
-            p = product if product.key in fresh else adapter.details(product)
+            p = (
+                product
+                if product.key in fresh and not product.raw.get("_needs_details")
+                else adapter.details(product)
+            )
             if p.key in seen:
                 continue
             seen.add(p.key)
@@ -242,7 +247,7 @@ def main():
     )
     parser.add_argument(
         "--retailer",
-        choices=["plazavea", "oechsle"],
+        choices=["plazavea", "oechsle", "ripley"],
         help="Limitar esta ejecución a una tienda",
     )
     args = parser.parse_args()
@@ -302,6 +307,7 @@ def main():
                 for slug, name, factory in [
                     ("plazavea", "Plaza Vea", PlazaVea),
                     ("oechsle", "Oechsle", Oechsle),
+                    ("ripley", "Ripley", Ripley),
                 ]:
                     if slug in enabled:
                         selected = settings.for_retailer(slug)

@@ -54,25 +54,36 @@ class Settings:
     sales_channel: str = ""
     seller_id: str = ""
     sku_id: str = ""
-    retailers: list = field(default_factory=lambda: ["plazavea", "oechsle"])
+    retailers: list = field(default_factory=lambda: ["plazavea", "oechsle", "ripley"])
     oechsle_context_confirmed: bool = True
     oechsle_postal_code: str = ""
     oechsle_sales_channel: str = ""
     oechsle_seller_id: str = ""
     oechsle_sku_id: str = ""
 
+    ripley_context_confirmed: bool = True
+    ripley_postal_code: str = ""
+    ripley_sales_channel: str = ""
+    ripley_seller_id: str = ""
+    ripley_sku_id: str = ""
+
     def for_retailer(self, name):
         if name == "plazavea":
             return self
-        if name != "oechsle":
+        if name not in ("oechsle", "ripley"):
             raise ValueError("Retailer desconocido")
         return replace(
             self,
-            context_confirmed=self.oechsle_context_confirmed,
-            postal_code=self.oechsle_postal_code,
-            sales_channel=self.oechsle_sales_channel,
-            seller_id=self.oechsle_seller_id,
-            sku_id=self.oechsle_sku_id,
+            **{
+                attr: getattr(self, name + "_" + attr)
+                for attr in (
+                    "context_confirmed",
+                    "postal_code",
+                    "sales_channel",
+                    "seller_id",
+                    "sku_id",
+                )
+            },
         )
 
     @classmethod
@@ -137,17 +148,22 @@ class Settings:
         s.retailers = list(
             dict.fromkeys(
                 x.strip().lower()
-                for x in os.getenv("RETAILERS", "plazavea,oechsle").split(",")
+                for x in os.getenv("RETAILERS", "plazavea,oechsle,ripley").split(",")
                 if x.strip()
             )
         )
         if not s.retailers or any(
-            x not in ("plazavea", "oechsle") for x in s.retailers
+            x not in ("plazavea", "oechsle", "ripley") for x in s.retailers
         ):
-            raise ValueError("RETAILERS: usa plazavea,oechsle")
+            raise ValueError("RETAILERS: usa plazavea,oechsle,ripley")
         s.oechsle_context_confirmed = (
             os.getenv("OECHSLE_CONTEXT_CONFIRMED", "true").strip().lower() == "true"
         )
         for attr in ["postal_code", "sales_channel", "seller_id", "sku_id"]:
             setattr(s, "oechsle_" + attr, os.getenv("OECHSLE_" + attr.upper(), ""))
+        s.ripley_context_confirmed = (
+            os.getenv("RIPLEY_CONTEXT_CONFIRMED", "true").strip().lower() == "true"
+        )
+        for attr in ["postal_code", "sales_channel", "seller_id", "sku_id"]:
+            setattr(s, "ripley_" + attr, os.getenv("RIPLEY_" + attr.upper(), ""))
         return s

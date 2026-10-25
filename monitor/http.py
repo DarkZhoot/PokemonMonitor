@@ -42,7 +42,7 @@ class Client:
         self.blocked_status = 429
         self.last_request = None
 
-    def get(self, url, params=None):
+    def get(self, url, params=None, *, as_text=False):
         if time.time() < self.blocked_until:
             raise RemoteError(
                 self.blocked_status, int(self.blocked_until - time.time())
@@ -80,6 +80,8 @@ class Client:
                     self.blocked_until = time.time() + 300
                     self.blocked_status = r.status_code
                 raise RemoteError(r.status_code)
+            if as_text:
+                return r.text
             try:
                 return r.json()
             except ValueError:

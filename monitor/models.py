@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit, unquote
@@ -10,6 +11,7 @@ DESCONOCIDO = "DESCONOCIDO"
 RETAILERS = {
     "Plaza Vea": ("plazavea", "www.plazavea.com.pe", "plazavea.com.pe"),
     "Oechsle": ("oechsle", "www.oechsle.pe", "oechsle.pe"),
+    "Ripley": ("ripley", "simple.ripley.com.pe", "ripley.com.pe"),
 }
 
 
@@ -27,7 +29,10 @@ def normalize_url(url, retailer="Plaza Vea"):
     ):
         raise ValueError("URL fuera del retailer seleccionado")
     path = unquote(p.path).rstrip("/")
-    if not path.endswith("/p"):
+    if retailer == "Ripley":
+        if not re.fullmatch(r"/[^/]+(?:[0-9]{6,}p|pmp[a-z0-9]+)", path, re.IGNORECASE):
+            raise ValueError("URL no es una ficha de Ripley reconocida")
+    elif not path.endswith("/p"):
         raise ValueError("URL no es de producto")
     return urlunsplit(("https", host, path, "", ""))
 
