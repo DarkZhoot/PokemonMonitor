@@ -2,6 +2,7 @@ import json
 import time
 import threading
 from functools import wraps
+from urllib.parse import quote
 import requests
 from monitor.http import retry_delay
 from monitor.store import now
@@ -49,13 +50,33 @@ class Telegram:
         if r.status_code == 200 and body.get("ok") is True:
             return True, 0, "", False
         code = body.get("error_code", r.status_code)
+        if type(code) is not int:
+            code = r.status_code
         if code == 429:
             params = body.get("parameters") or {}
             delay = retry_delay(
                 params.get("retry_after") if isinstance(params, dict) else None, 60
             )
             return False, delay, "Telegram limitado (429)", False
-        return False, 60, f"Telegram HTTP {code}", code in (400, 401, 403, 404)
+        error = f"Telegram HTTP {code}"
+        description = body.get("description")
+        if isinstance(description, str) and description.strip():
+            if self.settings.token:
+                for secret in (
+                    self.settings.token,
+                    quote(self.settings.token, safe=""),
+                ):
+                    description = description.replace(secret, "[oculto]")
+            error += ": " + " ".join(description.split())[:500]
+        parameters = body.get("parameters")
+        migrated = (
+            parameters.get("migrate_to_chat_id")
+            if isinstance(parameters, dict)
+            else None
+        )
+        if type(migrated) is int:
+            error += f"; grupo migrado, nuevo TELEGRAM_CHAT_ID={migrated}"
+        return False, 60, error, code in (400, 401, 403, 404)
 
 
 # Both polling threads share the same persistent queue. Serialize selection,

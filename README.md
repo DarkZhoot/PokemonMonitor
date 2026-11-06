@@ -774,3 +774,33 @@ búsqueda de 60 s no se reintenta cada minuto frente a 403/429/502. Plaza Vea si
 usando la finalización de su búsqueda completa para sus cuatro horas, y su revisión
 de productos conserva `PLAZAVEA_POLL_INTERVAL`. No se modifica el `.env`, la base
 de datos, la clasificación ni el historial de alertas para aplicar esta corrección.
+
+## Diagnóstico de rechazos Telegram
+
+`getChat` correcto confirma que el bot puede consultar el chat; no demuestra que
+pueda publicar mensajes ni que el botón de una alerta tenga un formato admitido.
+En errores de envío se conserva ahora el código y `description` devueltos por
+Telegram, con longitud limitada y token redactado. Si Telegram devuelve
+`parameters.migrate_to_chat_id`, se registra el nuevo ID para revisión manual;
+no se modifica automáticamente el `.env` ni el destino de las notificaciones.
+
+Los errores 400/401/403/404 siguen quedando fallidos sin reintentos automáticos.
+Después de actualizar el diagnóstico, `--retry-failed` con el servicio detenido
+reactiva los eventos fallidos. Arrancar el servicio reintenta sus mensajes originales
+(con su fecha original); si tienen éxito se marcan enviados y no se reenvían en
+cada ciclo. Este paso sí puede enviar alertas reales y no comprueba nuevamente el
+stock antes de reenviar el evento histórico. No se deben borrar eventos para probar.
+
+```bash
+sudo systemctl stop pokemonmonitor
+git pull --ff-only origin feature/telegram-stock-monitor
+.venv/bin/python main.py --retry-failed
+sudo systemctl start pokemonmonitor
+sudo journalctl -u pokemonmonitor --since "3 minutes ago" -o cat --no-pager | grep telegram_attempt
+```
+
+Un evento enviado debería mostrar `status=sent`. Si falla, usar el detalle concreto
+para resolver permisos, migración del grupo o formato; un `getChat=true` no descarta
+ninguna de esas causas de envío por sí solo. Una entrega de transporte incierta
+puede haber sido recibida aunque falte confirmación; la cola no garantiza entrega
+exactamente una vez ante fallos de red o cierre del proceso durante el envío.

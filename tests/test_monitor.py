@@ -360,6 +360,70 @@ class TelegramTests(unittest.TestCase):
             self.store.db.execute("SELECT status FROM events").fetchone()[0], "failed"
         )
 
+    def test_telegram_error_description_saved_for_failed_alert(self):
+        self.t.session.post.return_value = response(
+            400,
+            {
+                "ok": False,
+                "error_code": 400,
+                "description": "Bad Request: not enough rights to send text messages to the chat",
+            },
+        )
+        deliver(self.store, self.t, Mock())
+        row = self.store.db.execute("SELECT status,error FROM events").fetchone()
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("not enough rights", row["error"])
+
+    def test_migration_diagnostic_contains_new_id_without_changing_settings(self):
+        self.t.session.post.return_value = response(
+            400,
+            {
+                "ok": False,
+                "error_code": 400,
+                "description": "Bad Request: group chat was upgraded to a supergroup chat",
+                "parameters": {"migrate_to_chat_id": -100123456789},
+            },
+        )
+        result = self.t.send(self.event)
+        self.assertIn("TELEGRAM_CHAT_ID=-100123456789", result[2])
+        self.assertEqual(self.s.chat_id, "123")
+
+    def test_api_error_description_redacts_literal_and_encoded_token(self):
+        from urllib.parse import quote
+
+        self.s.token = "fixture:secret"
+        self.t.session.post.return_value = response(
+            400,
+            {
+                "ok": False,
+                "error_code": 400,
+                "description": "Bad Request: "
+                + self.s.token
+                + " "
+                + quote(self.s.token, safe=""),
+            },
+        )
+        result = self.t.send(self.event)
+        self.assertNotIn(self.s.token, result[2])
+        self.assertNotIn(quote(self.s.token, safe=""), result[2])
+        self.assertIn("[oculto]", result[2])
+
+    def test_error_description_is_bounded_and_malformed_fields_not_logged(self):
+        self.t.session.post.return_value = response(
+            400,
+            {
+                "ok": False,
+                "error_code": "test-secret",
+                "description": {"secret": "test-secret"},
+                "parameters": [],
+            },
+        )
+        self.assertEqual(self.t.send(self.event)[2], "Telegram HTTP 400")
+        self.t.session.post.return_value = response(
+            400, {"ok": False, "description": "x" * 4000}
+        )
+        self.assertLess(len(self.t.send(self.event)[2]), 530)
+
     def test_secret_redaction(self):
         self.t.session.post.side_effect = requests.ConnectionError("test-secret")
         self.assertNotIn("test-secret", str(self.t.send(self.event)))
