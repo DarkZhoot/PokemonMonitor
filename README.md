@@ -10,7 +10,7 @@ Por seguridad, `PLAZAVEA_CONTEXT_CONFIRMED=false` mantiene stock `DESCONOCIDO`. 
 
 ## Oechsle y varias tiendas
 
-El monitor incluye adaptadores para Plaza Vea y Oechsle, con el mismo objetivo: Pokémon TCG del 30.º aniversario en inglés. Comparte criterios, cola de Telegram y pausa entre ciclos; conserva **productos, estados y fechas de descubrimiento independientes por tienda**. Un mismo ID en dos tiendas no comparte historial. Un fallo de una tienda no evita procesar la otra, aunque las consultas son secuenciales y un timeout puede alargar el ciclo.
+El monitor incluye adaptadores para Plaza Vea y Oechsle, con el mismo objetivo: Pokémon TCG del 30.º aniversario en inglés. Comparte criterios y cola de Telegram; cada tienda tiene su propio hilo en `--loop` y conserva **productos, estados y fechas de descubrimiento independientes por tienda**. Un mismo ID en dos tiendas no comparte historial. Una búsqueda lenta o fallida solo retrasa el ciclo de esa tienda; las otras continúan. `--once` y `--discover` siguen siendo finitos y secuenciales.
 
 **Validación real de catálogo:** tras el bloqueo inicial CONNECT 403 del proxy, Oechsle respondió a las consultas autorizadas. Las cuatro búsquedas configuradas completaron su paginación y devolvieron 40 publicaciones, sin candidatos que confirmaran simultáneamente Pokémon TCG + 30.º aniversario + inglés. Se verificaron los detalles por ID del producto `3207764` (Booster Bundle Chaos Rising Pokémon Tcg Inglés), sus variantes y una oferta positiva con precio `149.9`, sin moneda explícita. Esa muestra es de otra expansión: no generó una alerta. Estas observaciones no prueban cobertura total ni disponibilidad por dirección, y pueden cambiar. Se añadió `www.oechsle.pe` al borrador de red; guardarlo no equivale a publicar el entorno. No se eluden bloqueos ni se desactiva TLS.
 
@@ -93,7 +93,7 @@ Después de detener el proceso anterior con Ctrl+C:
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-No cambies el token ni el chat ID del grupo. Ripley tiene sus propios estados y reloj persistente: el primer descubrimiento no reinicia el de Plaza Vea ni Oechsle. Los candidatos se consultan durante cada ciclo rápido. **Solo Ripley repite su búsqueda normal cada dos minutos** (`RIPLEY_DISCOVERY_INTERVAL=120`); Plaza Vea mantiene `DISCOVERY_INTERVAL=14400` (cuatro horas), y Oechsle usa `OECHSLE_DISCOVERY_INTERVAL=120`. Los reintentos y el bloqueo son compartidos por el proceso; las tiendas se procesan secuencialmente, sin prometer periodos exactos ni ausencia de límites. Para desactivar Ripley temporalmente, usa `RETAILERS=plazavea,oechsle`.
+No cambies el token ni el chat ID del grupo. Ripley tiene sus propios estados y reloj persistente: el primer descubrimiento no reinicia el de Plaza Vea ni Oechsle. Los candidatos se consultan durante cada ciclo rápido. **Solo Ripley repite su búsqueda normal cada dos minutos** (`RIPLEY_DISCOVERY_INTERVAL=120`); Plaza Vea mantiene `DISCOVERY_INTERVAL=14400` (cuatro horas), y Oechsle usa `OECHSLE_DISCOVERY_INTERVAL=120`. El proceso mantiene un bloqueo único y reintentos por tienda; en `--loop` trabajan en paralelo sin prometer periodos exactos ni ausencia de límites. Para desactivar Ripley temporalmente, usa `RETAILERS=plazavea,oechsle`.
 
 Un producto específico de Ripley puede configurarse en `MONITOR_PRODUCTS_JSON` con `"tienda":"Ripley"` y el enlace real a su ficha. Se revalida su identidad, vendedor Ripley, idioma y edición; tampoco se aceptan publicaciones de marketplace añadidas manualmente.
 
@@ -101,7 +101,7 @@ Un producto específico de Ripley puede configurarse en `MONITOR_PRODUCTS_JSON` 
 
 Se revirtió el descubrimiento ampliado y su proceso separado. Ripley vuelve a usar únicamente la búsqueda pública con `Vendido por:Ripley`, sin recorrer sitemaps ni categorías. No se modificaró la búsqueda de Plaza Vea. La búsqueda de Ripley usa ahora `RIPLEY_DISCOVERY_INTERVAL=120` por defecto, aunque no agregues esa variable a tu `.env`; `DISCOVERY_INTERVAL` sigue rigiendo Plaza Vea.
 
-El vencimiento se comprueba al iniciar cada ciclo. Con `MONITOR_INTERVAL=120`, Ripley vuelve a buscar después de la pausa y del tiempo de procesamiento. No es instantáneo ni garantiza exactamente 120 segundos entre inicios. Los fallos y 429 conservan sus esperas/reintentos; no se fuerza una búsqueda cada dos minutos frente a errores. Los antiguos `RIPLEY_DISCOVERY_MAX_*` se ignoran si quedaron en `.env`. No borres la base ni cambies token/chat. Los archivos de intercambio del explorador anterior ya no se procesan.
+El vencimiento se comprueba al iniciar cada ciclo. Con `MONITOR_INTERVAL=120`, el hilo de Ripley intenta iniciar su siguiente revisión 120 s después del inicio de la anterior. No es instantáneo ni garantiza exactamente 120 segundos entre inicios. Los fallos y 429 conservan sus esperas/reintentos; no se fuerza una búsqueda cada dos minutos frente a errores. Los antiguos `RIPLEY_DISCOVERY_MAX_*` se ignoran si quedaron en `.env`. No borres la base ni cambies token/chat. Los archivos de intercambio del explorador anterior ya no se procesan.
 
 Se conserva la limitación original: si Ripley no devuelve una ficha en su buscador, este modo no la descubrirá automáticamente, por muchas veces que se ejecute.
 
@@ -109,7 +109,7 @@ Se conserva la limitación original: si Ripley no devuelve una ficha en su busca
 
 Oechsle usa ahora `OECHSLE_DISCOVERY_INTERVAL=120` por defecto. La medición real de las cuatro búsquedas, con pausa de 0.5 s entre peticiones, tardó 8.7 segundos y devolvió 40 publicaciones sin errores. Ese tiempo es orientativo y depende de la conexión y del servidor; no es instantáneo. No se cambia su API ni sus filtros. Plaza Vea conserva su API, historial y descubrimiento cada cuatro horas. Ripley conserva su búsqueda cada dos minutos y el filtro de ventas propias.
 
-No necesitas modificar `.env` si quieres ese valor por defecto. `MONITOR_INTERVAL=120` sigue siendo la pausa después de cada ciclo completo: Oechsle, Ripley y el seguimiento de productos guardados se ejecutan secuencialmente, por lo que los inicios pueden estar separados por más de 120 segundos. Los errores y 429 conservan el backoff; no se eliminan pausas ni límites. Para personalizarlo se puede agregar `OECHSLE_DISCOVERY_INTERVAL=120` sin tocar `DISCOVERY_INTERVAL` de Plaza Vea.
+No necesitas modificar `.env` si quieres ese valor por defecto. `MONITOR_INTERVAL=120` es el intervalo objetivo entre inicios de revisión de cada tienda en su propio hilo; una tienda lenta ya no retrasa a las demás. Los errores y 429 conservan el backoff; no se eliminan pausas ni límites. Para personalizarlo se puede agregar `OECHSLE_DISCOVERY_INTERVAL=120` sin tocar `DISCOVERY_INTERVAL` de Plaza Vea.
 
 ## Ilahui: búsqueda directa cada dos minutos
 
@@ -147,7 +147,7 @@ $tiempo = Measure-Command {
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-No cambia el descubrimiento de Plaza Vea (cuatro horas), Oechsle o Ripley (dos minutos), ni sus filtros. Ilahui mantiene su propia fecha en SQLite. El intervalo es un mínimo entre búsquedas, comprobado al comenzar un ciclo: con `MONITOR_INTERVAL=120` se espera dos minutos **después del procesamiento del conjunto de tiendas**, sin prometer inicios exactos cada 120 segundos. Los errores/429 conservan el backoff; el sitio puede limitar acceso. Una ficha no publicada en los resultados de búsqueda no se descubrirá por esta vía; los candidatos guardados sí continúan consultándose por su enlace.
+No cambia el descubrimiento de Plaza Vea (cuatro horas), Oechsle o Ripley (dos minutos), ni sus filtros. Ilahui mantiene su propia fecha en SQLite. El intervalo es un mínimo entre búsquedas, comprobado al comenzar un ciclo: con `MONITOR_INTERVAL=120` su hilo intenta iniciar revisiones cada dos minutos, sin esperar a otras tiendas ni prometer tiempos exactos. Los errores/429 conservan el backoff; el sitio puede limitar acceso. Una ficha no publicada en los resultados de búsqueda no se descubrirá por esta vía; los candidatos guardados sí continúan consultándose por su enlace.
 
 ## Tai Loy: búsqueda directa cada dos minutos
 
@@ -186,7 +186,7 @@ $tiempo = Measure-Command {
 .\.venv\Scripts\python.exe main.py --loop
 ```
 
-Cada retailer conserva sus propios candidatos, historial y reloj. Plaza Vea sigue descubriendo cada cuatro horas; los demás cada dos minutos por defecto. El procesamiento es secuencial y se añade a la pausa `MONITOR_INTERVAL`; dos minutos no significa un tiempo exacto entre inicios. Los fallos/bloqueos no significan stock cero y conservan el backoff. Las fichas que la búsqueda no publica no se descubrirán por este modo directo; los candidatos ya guardados sí continúan consultándose.
+Cada retailer conserva sus propios candidatos, historial y reloj. Plaza Vea sigue descubriendo cada cuatro horas; los demás cada dos minutos por defecto. Cada tienda tiene un hilo independiente cuyo intervalo objetivo es `MONITOR_INTERVAL`; dos minutos no significa un tiempo exacto entre inicios. Los fallos/bloqueos no significan stock cero y conservan el backoff. Las fichas que la búsqueda no publica no se descubrirán por este modo directo; los candidatos ya guardados sí continúan consultándose.
 
 ## Instalación
 
@@ -246,7 +246,7 @@ En Linux usa los mismos argumentos con `.venv/bin/python`. Cron y Programador de
 | `TELEGRAM_BOT_TOKEN` | Token secreto de BotFather |
 | `TELEGRAM_CHAT_ID` | Identificador del chat que recibirá avisos |
 | `MONITOR_DATA_DIR` | `runtime`, relativo al repositorio; mismo directorio para todas las ejecuciones |
-| `MONITOR_INTERVAL` | 120 segundos de espera tras cada ciclo, mínimo 60; solo para `--loop` |
+| `MONITOR_INTERVAL` | Intervalo objetivo entre inicios de revisión de cada tienda: 120 s, mínimo 60; solo para `--loop` |
 | `DISCOVERY_INTERVAL` | 14400 segundos (4 horas) entre descubrimientos completados |
 | `DISCOVERY_RETRY_INTERVAL` | 900 segundos (15 minutos) antes de reintentar un descubrimiento vencido fallido |
 | `MONITOR_TIMEOUT` | 20 segundos por petición |
@@ -509,9 +509,9 @@ $tiempo = Measure-Command {
 Revisar `search_incomplete`, `discovery_finished` y `cycle_finished` antes de
 considerar validada la integración. `--retailer falabella --list-products` muestra
 los candidatos guardados sin consultar la red. `main.py --loop` ejecuta todas las
-tiendas activadas. El reloj de descubrimiento de Falabella es independiente y
-predetermina 120 segundos; el ciclo completo y la espera posterior hacen que la
-frecuencia real no sea exactamente de dos minutos. Los demás adaptadores no cambian.
+tiendas activadas. El reloj de descubrimiento de Falabella predetermina 120 segundos y su hilo
+trabaja sin esperar las demás tiendas. La frecuencia real depende de su tiempo
+de consulta, vencimiento de descubrimiento y pausas por errores. Los demás adaptadores no cambian.
 
 
 ## Revisión independiente de Plaza Vea cada 45 segundos
@@ -523,13 +523,14 @@ PLAZAVEA_POLL_INTERVAL=45
 DISCOVERY_INTERVAL=14400
 ```
 
-`PLAZAVEA_POLL_INTERVAL=0` (predeterminado) conserva el modo secuencial anterior.
-Con un valor entre 15 y 86400, únicamente `--loop` revisa Plaza Vea en un hilo
-independiente. Las otras tiendas conservan sus intervalos y `MONITOR_INTERVAL`
-sigue siendo su pausa global (mínimo 60); no debe cambiarse a 45.
-El proceso conserva el bloqueo único, la base SQLite y el historial actuales.
-Cada hilo tiene su propia conexión SQLite y sesiones HTTP; la selección/envío de
-alertas de la cola compartida se serializa para evitar envíos simultáneos duplicados.
+`PLAZAVEA_POLL_INTERVAL=0` (predeterminado) usa `MONITOR_INTERVAL` para Plaza Vea.
+Con un valor entre 15 y 86400, Plaza Vea usa ese intervalo propio en `--loop`.
+Todas las tiendas activadas trabajan en hilos independientes, manteniendo un
+proceso, un bloqueo exclusivo y la misma base SQLite e historial.
+Cada hilo tiene su propia conexión SQLite y sesiones HTTP. Solo un hilo puede
+enviar Telegram a la vez; otros que encuentren el envío ocupado continúan sus
+consultas sin esperar por la red de Telegram y dejan la cola al remitente activo.
+El supervisor también reintenta la cola cada cinco segundos, respetando su cooldown.
 
 El objetivo es iniciar una revisión cada 45 s sin esperar por búsquedas de otras
 tiendas. Si el ciclo de Plaza Vea dura más del intervalo, se espera otro intervalo
@@ -562,5 +563,63 @@ sudo journalctl -u pokemonmonitor -n 40 --no-pager
 
 Comparar las fechas `product_checked` del mismo `product_key` en ciclos sucesivos
 para comprobar la cadencia real. Los registros de las otras tiendas pueden
-intercalarse, puesto que los dos bucles trabajan en paralelo. Para volver al modo
-anterior, cambiar `PLAZAVEA_POLL_INTERVAL=0` y reiniciar el servicio.
+intercalarse, puesto que los dos bucles trabajan en paralelo. Para que Plaza Vea use el mismo intervalo general, cambiar
+`PLAZAVEA_POLL_INTERVAL=0` y reiniciar el servicio; seguirá siendo independiente.
+
+
+## Todas las tiendas independientes en modo continuo
+
+`main.py --loop` inicia un trabajador por tienda activada en `RETAILERS`. Se
+registran `retailer_polling_started` con nombre e intervalo, y `retailer_cycle_started`
+en cada vuelta. No hay una pausa global después de procesar todas las tiendas.
+`--retailer falabella --loop` inicia únicamente el trabajador de Falabella.
+`--once`, `--discover`, la migración, filtros de vendedor y clasificación se conservan.
+
+Para la configuración solicitada:
+
+```dotenv
+MONITOR_INTERVAL=60
+PLAZAVEA_POLL_INTERVAL=25
+DISCOVERY_INTERVAL=14400
+OECHSLE_DISCOVERY_INTERVAL=60
+RIPLEY_DISCOVERY_INTERVAL=60
+ILAHUI_DISCOVERY_INTERVAL=60
+TAILOY_DISCOVERY_INTERVAL=60
+FALABELLA_DISCOVERY_INTERVAL=60
+DISCOVERY_RETRY_INTERVAL=900
+```
+
+Plaza Vea tiene un objetivo de 25 s y las otras tiendas de 60 s entre inicios.
+Cada tienda ejecuta una sola revisión a la vez. Si una revisión excede su intervalo,
+se espera otro intervalo completo después de terminar, sin superposición ni ráfagas
+para recuperar revisiones perdidas. Una consulta Tai Loy de 264 s afecta únicamente
+al trabajador de Tai Loy. Errores al inicializar un trabajador se reintentan allí,
+sin reiniciar los otros. CPU, memoria, SQLite y Telegram siguen siendo compartidos;
+esta independencia no garantiza horarios exactos ni elimina restricciones del retail.
+
+En tiendas distintas de Plaza Vea, un descubrimiento completado se fecha por su
+inicio para no saltar una búsqueda de cada dos al iniciar revisiones cada 60 s.
+Los descubrimientos fallidos siguen el backoff `DISCOVERY_RETRY_INTERVAL` y no
+se fuerzan cada minuto. Plaza Vea conserva su reloj de descubrimiento desde la
+finalización, por defecto cuatro horas. Los timestamps previos se conservan; el
+nuevo criterio se aplica tras el siguiente descubrimiento completado.
+
+Para actualizar el servicio existente no se necesitan bases ni servicios nuevos:
+
+```bash
+cd ~/PokemonMonitor
+sudo systemctl stop pokemonmonitor
+git pull --ff-only origin feature/telegram-stock-monitor
+.venv/bin/python -m unittest discover -s tests -q
+sudo systemctl start pokemonmonitor
+sudo systemctl status pokemonmonitor --no-pager
+sudo journalctl -u pokemonmonitor --since "5 minutes ago" -o cat --no-pager | grep retailer_polling_started
+```
+
+La configuración anterior ya guardada se utiliza sin cambiar el `.env`. Debe
+aparecer una línea de arranque por cada tienda activada. Para medir su frecuencia,
+comparar `retailer_cycle_started` de la misma tienda; `cycle_finished` ocurre después
+de procesar y no demuestra por sí solo que haya buscado. `mode=monitor` con cero
+productos revisados no confirma la recuperación de una búsqueda fallida. Una
+búsqueda incompleta puede dejar a la tienda esperando los 15 minutos de reintento.
+Los errores de Ripley/Ilahui/Tai Loy no se corrigen automáticamente con concurrencia.

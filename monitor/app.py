@@ -5,7 +5,7 @@ from logging.handlers import RotatingFileHandler
 import time
 from config import PRODUCTOS
 from monitor.http import RemoteError
-from monitor.polling import PlazaPolling
+from monitor.polling import RetailerPolling
 from monitor.locking import exclusive, AlreadyRunning
 from monitor.models import Product, Stock, normalize_url
 from monitor.settings import Settings, ROOT
@@ -52,8 +52,9 @@ def cycle(
     healthy = True
     deliver(store, telegram, log)
     result = None
+    discovery_stamp = None
     if discover:
-        store.mark_discovery(retailer=retailer)
+        discovery_stamp = store.mark_discovery(retailer=retailer)
         log("discovery_started", retailer=retailer)
         try:
             result = adapter.search()
@@ -154,7 +155,12 @@ def cycle(
     if discover:
         complete = result is not None and result.complete
         if complete:
-            store.mark_discovery(successful=True, retailer=retailer)
+            if retailer == "Plaza Vea":
+                store.mark_discovery(successful=True, retailer=retailer)
+            else:
+                store.mark_discovery(
+                    successful=True, retailer=retailer, timestamp=discovery_stamp
+                )
         log(
             "discovery_finished",
             retailer=retailer,
@@ -272,7 +278,7 @@ def main():
     try:
         with exclusive(settings.data_dir / "monitor.lock"):
             store = Store(settings.data_dir / "monitor.sqlite3")
-            plaza_polling = None
+            workers = []
             try:
                 store.migrate(ROOT)
                 enforce_seller_scopes(store, log)
@@ -321,29 +327,33 @@ def main():
                     log("failed_events_reactivated")
                     return 0
                 enabled = [args.retailer] if args.retailer else settings.retailers
-                adapters = {}
-                for slug, name, factory in [
+                factories = [
                     ("plazavea", "Plaza Vea", PlazaVea),
                     ("oechsle", "Oechsle", Oechsle),
                     ("ripley", "Ripley", Ripley),
                     ("ilahui", "Ilahui", Ilahui),
                     ("tailoy", "Tai Loy", Tailoy),
                     ("falabella", "Falabella", Falabella),
-                ]:
-                    if slug in enabled:
-                        selected = settings.for_retailer(slug)
+                ]
+                adapters = {}
+                for slug, name, factory in factories:
+                    if slug not in enabled:
+                        continue
+                    selected = settings.for_retailer(slug)
+                    if args.loop:
+                        interval = (
+                            (settings.plazavea_poll_interval or settings.interval)
+                            if slug == "plazavea"
+                            else settings.interval
+                        )
+                        workers.append(
+                            RetailerPolling(
+                                selected, log, scheduled_cycle, name, factory, interval
+                            )
+                        )
+                    else:
                         adapters[name] = (selected, factory(selected))
-                if (
-                    args.loop
-                    and settings.plazavea_poll_interval
-                    and "Plaza Vea" in adapters
-                ):
-                    plaza_settings, _ = adapters.pop("Plaza Vea")
-                    plaza_polling = PlazaPolling(plaza_settings, log, scheduled_cycle)
-                    plaza_polling.start()
-                while True:
-                    if plaza_polling and not plaza_polling.thread.is_alive():
-                        return 1
+                if not args.loop:
                     try:
                         ok = run_retailers(
                             settings,
@@ -353,29 +363,33 @@ def main():
                             log,
                             force_discovery=args.discover,
                         )
+                        return 0 if ok else 1
                     except Exception:
                         log(
                             "cycle_failed",
                             error="Error interno; revisar estado y configuración",
                         )
-                        ok = False
-                        if not args.loop:
-                            return 1
-                    if not args.loop:
-                        return 0 if ok else 1
-                    # Retry queued Telegram deliveries while respecting the retailer interval.
-                    end = time.monotonic() + settings.interval
-                    while time.monotonic() < end:
-                        if plaza_polling and not plaza_polling.thread.is_alive():
-                            return 1
-                        time.sleep(min(5, max(0, end - time.monotonic())))
-                        try:
-                            deliver(store, telegram, log)
-                        except Exception:
-                            log("delivery_failure", error="No se pudo procesar la cola")
+                        return 1
+                for worker in workers:
+                    worker.start()
+                # No retailer HTTP work runs here: only supervision and queued delivery.
+                while True:
+                    if any(not worker.thread.is_alive() for worker in workers):
+                        log(
+                            "polling_supervisor_failed",
+                            error="Un trabajador se detuvo; reiniciar servicio",
+                        )
+                        return 1
+                    time.sleep(5)
+                    try:
+                        deliver(store, telegram, log)
+                    except Exception:
+                        log("delivery_failure", error="No se pudo procesar la cola")
             finally:
-                if plaza_polling:
-                    plaza_polling.close()
+                for worker in workers:
+                    worker.stop()
+                for worker in workers:
+                    worker.close()
                 store.close()
     except AlreadyRunning:
         log("already_running")

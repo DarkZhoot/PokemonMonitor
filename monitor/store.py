@@ -17,15 +17,13 @@ class Store:
     def __init__(self, path):
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
-        self.db.executescript(
-            """
+        self.db.executescript("""
         PRAGMA journal_mode=WAL;
         PRAGMA synchronous=FULL;
         CREATE TABLE IF NOT EXISTS products(key TEXT PRIMARY KEY, data TEXT NOT NULL, state TEXT NOT NULL, last_known TEXT, checked TEXT, detail TEXT, price REAL, currency TEXT);
         CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY, product_key TEXT, payload TEXT NOT NULL, status TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, next_try REAL DEFAULT 0, error TEXT, sent_at TEXT);
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);
-        """
-        )
+        """)
 
     def close(self):
         self.db.close()
@@ -68,13 +66,16 @@ class Store:
             is not None
         )
 
-    def mark_discovery(self, successful=False, retailer="Plaza Vea"):
+    def mark_discovery(self, successful=False, retailer="Plaza Vea", timestamp=None):
         keys = self.discovery_keys(retailer)
+        timestamp = time.time() if timestamp is None else timestamp
         with self.db:
             self.db.execute(
                 "INSERT OR REPLACE INTO meta VALUES(?,?)",
-                (keys[1 if successful else 0], str(time.time())),
+                (keys[1 if successful else 0], str(timestamp)),
             )
+
+        return timestamp
 
     def migrate(self, root):
         if self.db.execute("SELECT 1 FROM meta WHERE key='migrated'").fetchone():

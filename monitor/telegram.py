@@ -66,8 +66,14 @@ _delivery_lock = threading.RLock()
 def serialized_delivery(function):
     @wraps(function)
     def wrapped(*args, **kwargs):
-        with _delivery_lock:
+        # Another worker is delivering; leave the shared queue for that sender
+        # instead of delaying this retailer's catalog requests behind Telegram.
+        if not _delivery_lock.acquire(blocking=False):
+            return False
+        try:
             return function(*args, **kwargs)
+        finally:
+            _delivery_lock.release()
 
     return wrapped
 
