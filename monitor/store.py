@@ -28,6 +28,30 @@ class Store:
     def close(self):
         self.db.close()
 
+    def retired_keys(self):
+        return {
+            row[0][len("retired:") :]
+            for row in self.db.execute(
+                "SELECT key FROM meta WHERE key LIKE 'retired:%'"
+            )
+        }
+
+    def retire_product(self, key):
+        if not self.db.execute("SELECT 1 FROM products WHERE key=?", (key,)).fetchone():
+            raise ValueError("Producto no registrado")
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO meta VALUES(?,?)", ("retired:" + key, now())
+            )
+            self.db.execute(
+                "UPDATE events SET status='cancelled',error=? WHERE product_key=? AND status IN ('pending','failed')",
+                ("Retirado del seguimiento por el usuario", key),
+            )
+
+    def restore_product(self, key):
+        with self.db:
+            self.db.execute("DELETE FROM meta WHERE key=?", ("retired:" + key,))
+
     def products(self):
         return [
             Product(**json.loads(r["data"]))
@@ -154,6 +178,10 @@ class Store:
                 self.db.execute("DELETE FROM products WHERE key=?", (row["key"],))
 
     def observe(self, product, stock):
+        if self.db.execute(
+            "SELECT 1 FROM meta WHERE key=?", ("retired:" + product.key,)
+        ).fetchone():
+            return None
         restrict_ripley(product)
         restrict_oechsle(product)
         restrict_falabella(product)

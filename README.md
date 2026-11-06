@@ -623,3 +623,36 @@ de procesar y no demuestra por sí solo que haya buscado. `mode=monitor` con cer
 productos revisados no confirma la recuperación de una búsqueda fallida. Una
 búsqueda incompleta puede dejar a la tienda esperando los 15 minutos de reintento.
 Los errores de Ripley/Ilahui/Tai Loy no se corrigen automáticamente con concurrencia.
+
+
+## Retirar publicaciones del seguimiento conservando el historial
+
+`--retire-product TIENDA:ID` (repetible) deja de consultar una entrada guardada,
+la oculta de `--list-products` y cancela sus eventos pendientes/fallidos, sin borrar
+productos, último stock conocido ni alertas ya enviadas. El marcador persiste en
+SQLite y ni los enlaces manuales de `config.py` ni el descubrimiento lo reactivan.
+No hay retirada automática por 403/429, timeout ni catálogo vacío: esta decisión
+la solicita el usuario. Un error genérico de consulta no prueba que se haya
+retirado el producto del backend.
+
+Con el servicio detenido, por ejemplo:
+
+```bash
+.venv/bin/python main.py --retire-product plazavea:102372340
+```
+
+Solo modifica esa clave, sin afectar otros registros del mismo retailer. Una URL
+antigua con ID diferente puede retirarse conservando el registro del álbum con URL
+actualizada. Si algún identificador solicitado no existe, la operación devuelve
+error sin retirar ninguno. La misma exclusión se aplica al guardar observaciones,
+para impedir alertas nuevas de productos retirados.
+
+Para reactivar deliberadamente una entrada, también con el servicio detenido:
+
+```bash
+.venv/bin/python main.py --restore-product plazavea:102372340
+```
+
+La reactivación conserva el historial y no vuelve a poner en cola los avisos
+cancelados. Para vigilar de nuevo un producto retirado que vuelva a publicarse con
+el mismo ID es necesario restaurarlo; otros IDs nuevos se descubren normalmente.

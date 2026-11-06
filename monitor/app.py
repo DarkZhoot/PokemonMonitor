@@ -68,7 +68,10 @@ def cycle(
         if result and not result.complete:
             healthy = False
             log("search_incomplete", retailer=retailer, errors=result.errors)
-    saved = [p for p in store.products() if p.retailer == retailer]
+    retired = store.retired_keys()
+    saved = [
+        p for p in store.products() if p.retailer == retailer and p.key not in retired
+    ]
     # Normal polling visits confirmed targets only; uncertain catalog entries stay stored.
     products = {p.key: p for p in saved if p.classification == "CANDIDATO"}
     saved_by_url = {p.url: p for p in saved}
@@ -84,6 +87,8 @@ def cycle(
                 url,
                 retailer=retailer,
             )
+        if p.key in retired:
+            continue
         if retailer == "Ripley" and ripley_seller(p) == "marketplace":
             continue
         if retailer == "Oechsle" and oechsle_seller(p) == "marketplace":
@@ -92,6 +97,8 @@ def cycle(
     fresh = set()
     if result:
         for p in result.products:
+            if p.key in retired:
+                continue
             if p.classification != "CANDIDATO":
                 # Discovery metadata is sufficient to retain a pending entry, without
                 # paying for another detail request or changing any known stock.
@@ -120,7 +127,7 @@ def cycle(
                 if product.key in fresh and not product.raw.get("_needs_details")
                 else adapter.details(product)
             )
-            if p.key in seen:
+            if p.key in retired or p.key in seen:
                 continue
             seen.add(p.key)
             stock = (
@@ -267,6 +274,18 @@ def main():
         action="store_true",
         help="Mostrar candidatos guardados y sus enlaces, sin consultar la tienda",
     )
+    group.add_argument(
+        "--retire-product",
+        action="append",
+        metavar="TIENDA:ID",
+        help="Retirar un producto del seguimiento conservando su historial; repetible",
+    )
+    group.add_argument(
+        "--restore-product",
+        action="append",
+        metavar="TIENDA:ID",
+        help="Reactivar un producto retirado; repetible",
+    )
     parser.add_argument(
         "--retailer",
         choices=["plazavea", "oechsle", "ripley", "ilahui", "tailoy", "falabella"],
@@ -282,7 +301,31 @@ def main():
             try:
                 store.migrate(ROOT)
                 enforce_seller_scopes(store, log)
+                if args.retire_product or args.restore_product:
+                    keys = args.retire_product or args.restore_product
+                    known = {p.key for p in store.products()}
+                    if any(key not in known for key in keys):
+                        log(
+                            "product_scope_failed",
+                            error="Algún identificador no está registrado; no se modificó el seguimiento",
+                        )
+                        return 1
+                    for key in keys:
+                        if args.retire_product:
+                            store.retire_product(key)
+                        else:
+                            store.restore_product(key)
+                        log(
+                            (
+                                "product_retired"
+                                if args.retire_product
+                                else "product_restored"
+                            ),
+                            product_key=key,
+                        )
+                    return 0
                 if args.list_products:
+                    retired = store.retired_keys()
                     print(
                         json.dumps(
                             [
@@ -294,6 +337,7 @@ def main():
                                 }
                                 for p in store.products()
                                 if p.classification == "CANDIDATO"
+                                and p.key not in retired
                                 and (
                                     not args.retailer
                                     or p.key.startswith(args.retailer + ":")
