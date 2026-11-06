@@ -656,3 +656,46 @@ Para reactivar deliberadamente una entrada, también con el servicio detenido:
 La reactivación conserva el historial y no vuelve a poner en cola los avisos
 cancelados. Para vigilar de nuevo un producto retirado que vuelva a publicarse con
 el mismo ID es necesario restaurarlo; otros IDs nuevos se descubren normalmente.
+
+
+## Plaza Vea: productos Pokémon con marca genérica TCG
+
+Algunas fichas sí se descubren, pero su título omite Pokémon, la marca es `TCG`
+y la descripción está vacía. Por ejemplo, el catálogo aportado por el usuario
+mostró UPC `102355701` (modelo `10-10448-120`, variantes DIA/NOCHE) y colección
+con figura `102355697` (modelo `10-10452-120`, variantes MEWTWO/MEW) como
+`POR_VERIFICAR`. No habían desaparecido del catálogo ni habían sido retiradas
+con `--retire-product`.
+
+Solo el adaptador Plaza Vea añade evidencia de identidad a la clasificación:
+
+- Las variantes MEW/MEWTWO proporcionan identidad Pokémon dentro del contexto
+  de marca TCG. El idioma inglés y la edición 30 siguen siendo obligatorios.
+- Para UPC, el modelo exacto y la familia Ultra Premium fueron verificados con
+  los datos del catálogo y las imágenes proporcionadas por el usuario. Se
+  registran en `VERIFIED_POKEMON_MODELS`; no se presupone que cualquier TCG o
+  cualquier número de modelo pertenezca a Pokémon. Modelos nuevos sin evidencia
+  suficiente siguen pendientes hasta verificarse.
+
+El nombre, descripción, URL y reglas de stock no se modifican. Se registra la
+procedencia en `raw._identity_evidence`; no se utiliza una lista de URLs/IDs para
+forzar seguimiento. Un SKU distinto con las mismas variantes explícitas puede
+identificarse. Los conflictos con otros juegos, exclusiones por idioma y otras
+ediciones no se aceptan. Los otros retailers y el clasificador compartido no
+cambian, ni se añaden peticiones al descubrimiento por esta corrección.
+
+Tras actualizar, un descubrimiento forzado reclasifica esos registros existentes
+sin borrar el historial:
+
+```bash
+sudo systemctl stop pokemonmonitor
+git pull --ff-only origin feature/telegram-stock-monitor
+.venv/bin/python main.py --retailer plazavea --discover
+.venv/bin/python main.py --retailer plazavea --list-products
+sudo systemctl start pokemonmonitor
+```
+
+La presencia de una imagen en el navegador no es una lectura automática de esa
+imagen: los modelos indicados se verificaron manualmente a partir de la evidencia
+aportada. La corrección no reactiva productos retirados expresamente y no implica
+que una búsqueda descubra todo el catálogo.
