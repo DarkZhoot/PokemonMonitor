@@ -804,3 +804,48 @@ para resolver permisos, migración del grupo o formato; un `getChat=true` no des
 ninguna de esas causas de envío por sí solo. Una entrega de transporte incierta
 puede haber sido recibida aunque falte confirmación; la cola no garantiza entrega
 exactamente una vez ante fallos de red o cierre del proceso durante el envío.
+
+## Falabella: conservar fichas y no exigir Pokémon en el prefiltro
+
+El prefiltro de tarjetas de Falabella exigía Pokémon antes de consultar la ficha,
+aunque el clasificador ya admitía identidad por variantes/modelos. Una tarjeta
+con marca TCG y nombre abreviado podía descartarse antes de ese clasificador.
+Ahora se admiten tarjetas de familias TCG 30 aniversario sin esa palabra, y se
+agregan solo a Falabella las consultas `tcg 30` y `tcg 30th`, con filtro de vendedor
+propio en todas las páginas y deduplicación de detalles entre términos.
+
+En el contexto de familias de cartas TCG, el adaptador reconoce abreviaturas en
+el título real (`TCG30TH`, `30TH`, `30 TH`, `ULTRA PC`, `UPC`, `ING`). Conserva el
+nombre original y registra aliases en metadata. No deduce identidad, edición,
+idioma ni stock del slug de URL. `ESP` explícito se convierte en evidencia de español,
+y la disponibilidad sigue requiriendo ofertas vendidas por Falabella y stock
+explícito; marketplace no aporta disponibilidad a una oferta propia agotada.
+
+Una URL descubierta no se pierde si falla su detalle: se almacena pendiente,
+marcada con `_detail_error`, y la búsqueda informa incompletitud. Las fichas
+cercanas al objetivo con venta propia comprobada se marcan `_falabella_watch`;
+se siguen consultando por enlace directo en los ciclos de Falabella aunque el
+buscador las omita o esté esperando su siguiente reintento. Una ficha sin evidencia
+suficiente queda desconocida y no genera alertas. Un dato posterior incompleto no
+borra la intención de vigilar un enlace previamente confirmado.
+
+Para registrar una publicación que el usuario ya encontró, con el servicio detenido:
+
+```bash
+.venv/bin/python main.py --retailer falabella --track-url "https://www.falabella.com.pe/falabella-pe/product/80233138/tcg-30th-ultra-pc-ing-espeon"
+```
+
+Este comando solo guarda la intención de seguimiento, sin consultar la red ni
+inventar stock. Si el ID ya existe, `product_tracking_existing` muestra clasificación,
+estado, último stock conocido y conteos de alertas previas; se conservan esos datos.
+Si es nuevo, comienza pendiente. Un producto retirado requiere restauración explícita.
+El trabajador comprobará luego ficha, identidad, idioma, vendedor y stock antes de
+notificar. `--retailer falabella --once` permite comprobarlo con el servicio detenido;
+puede buscar además de revisar enlaces guardados y puede enviar alertas reales.
+
+Los candidatos continúan guardados y no se eliminan cuando desaparecen del listado.
+Esto no garantiza que se descubran URLs nunca indexadas ni captura reposiciones más
+breves que el intervalo de consulta. El caso `80233138` se utiliza en regresiones
+simuladas de título abreviado y seguimiento directo; su respuesta real actual no
+se pudo consultar desde el entorno de desarrollo por un rechazo del proxy. Los
+registros desde AWS deben verificar su clasificación, disponibilidad y entrega.

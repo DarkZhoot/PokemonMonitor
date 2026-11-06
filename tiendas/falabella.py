@@ -21,6 +21,80 @@ SEARCH_URL = BASE_URL + "/falabella-pe/search"
 SELLER_PARAM = "f.derived.variant.sellerId"
 
 
+EXTRA_SEARCH_TERMS = ("tcg 30", "tcg 30th")
+
+
+def falabella_evidence(raw):
+    metadata = evidence(raw)
+    name = re.sub(
+        r"\btcg(?=30(?:th)?\b)",
+        "TCG ",
+        str(metadata.get("productName") or ""),
+        flags=re.IGNORECASE,
+    )
+    context = normalizar(name + " " + str(metadata.get("brand") or ""))
+    family = re.search(
+        r"\b(ultra\s+(?:pc|premium)|upc|mini\s+tin|booster|binder|elite\s+trainer|etb|figure|figura)\b",
+        context,
+    )
+    aliases = []
+    if family and re.search(r"\b(tcg|trading card game)\b", context):
+        if re.search(r"\b30\s*th\b", name, re.IGNORECASE) and not re.search(
+            r"anniversary|aniversario", name, re.IGNORECASE
+        ):
+            name = re.sub(r"\b30\s*th\b", "30th anniversary", name, flags=re.IGNORECASE)
+            aliases.append("30th: aniversario en familia TCG")
+        if re.search(r"\bing\b", name, re.IGNORECASE):
+            name = re.sub(r"\bing\b", "ingles", name, flags=re.IGNORECASE)
+            aliases.append("ing: ingles")
+        # A bilingual abbreviation must not be silently treated as English-only.
+        name = re.sub(r"\besp\b", "espanol", name, flags=re.IGNORECASE)
+    metadata["productName"] = name
+    return metadata, aliases
+
+
+def near_anniversary(metadata):
+    text = normalizar(
+        str(metadata.get("productName") or "") + " " + str(metadata.get("brand") or "")
+    )
+    return bool(
+        re.search(r"\b(tcg|trading card game)\b", text)
+        and re.search(r"\b30\s*th\b|\b30\s*[.oº°]*\s*(aniversario|anniversary)\b", text)
+    )
+
+
+def relevant_card(raw):
+    text = normalizar(
+        str(raw.get("displayName") or "") + " " + str(raw.get("brand") or "")
+    )
+    text = re.sub(r"\btcg(?=30(?:th)?\b)", "tcg ", text)
+    card = re.search(
+        r"\b(tcg|trading|cartas|booster|deck|etb|binder|mini tin)\b|elite trainer|ultra (?:pc|premium)",
+        text,
+    )
+    return bool(
+        card
+        and (
+            re.search(r"\bpokemon\b", text)
+            or re.search(
+                r"\b30\s*th\b|\b30\s*[.oº°]*\s*(aniversario|anniversary)\b", text
+            )
+        )
+    )
+
+
+def pending_detail(product):
+    product.classification = "POR_VERIFICAR"
+    product.raw["_detail_error"] = True
+    previous = product.raw.get("_classification", {})
+    missing = list(
+        dict.fromkeys(previous.get("missing", []) + ["detalles verificables de ficha"])
+    )
+    product.raw["_classification"] = dict(
+        previous, classification="POR_VERIFICAR", review_needed=True, missing=missing
+    )
+
+
 class Falabella:
     retailer = "Falabella"
 
@@ -34,8 +108,9 @@ class Falabella:
     def normalize(self, raw):
         url = normalize_url(urljoin(BASE_URL, raw.get("url", "")), self.retailer)
         identifier = urlsplit(url).path.split("/")[3]
-        decision = assess(evidence(raw), self.settings.exclusions)
-        return restrict_falabella(
+        metadata, aliases = falabella_evidence(raw)
+        decision = assess(metadata, self.settings.exclusions)
+        product = restrict_falabella(
             Product(
                 identifier,
                 str(raw.get("name") or ""),
@@ -45,6 +120,28 @@ class Falabella:
                 raw=annotated_raw({"schema": raw, "_needs_details": True}, decision),
             )
         )
+        offers = raw.get("offers") or []
+        if isinstance(offers, dict):
+            offers = [offers]
+        product.raw["_falabella_watch"] = (
+            product.classification != "DESCARTADO"
+            and near_anniversary(metadata)
+            and isinstance(offers, list)
+            and any(falabella_offer_seller(x) == "falabella" for x in offers)
+        )
+        if aliases:
+            product.raw["_metadata_aliases"] = aliases
+        return product
+
+    def discovery_terms(self):
+        return list(dict.fromkeys(self.settings.terms + list(EXTRA_SEARCH_TERMS)))
+
+    def tracking_stub(self, url):
+        product = self.normalize({"url": normalize_url(url, self.retailer), "name": ""})
+        product.name = "Producto Falabella pendiente de verificar"
+        product.raw["_falabella_watch"] = True
+        product.raw["_explicit_watch"] = True
+        return product
 
     def native_listing(self, page):
         data = page.next_data
@@ -130,12 +227,16 @@ class Falabella:
             raise ValueError("Ficha Falabella con datos contradictorios")
         p = matches[0]
         p.raw["_needs_details"] = False
+        if p.classification != "DESCARTADO" and product.raw.get("_falabella_watch"):
+            p.raw["_falabella_watch"] = True
+        if product.raw.get("_explicit_watch"):
+            p.raw["_explicit_watch"] = True
         return p
 
     def search(self):
         result = SearchResult()
         found, cache = {}, {}
-        for term in self.settings.terms:
+        for term in self.discovery_terms():
             params = {"Ntt": term, "facetSelected": "true", SELLER_PARAM: "FALABELLA"}
             seen_pages = set()
             for number in range(1, self.settings.pages + 1):
@@ -162,19 +263,12 @@ class Falabella:
                             cards.append({"url": link, "name": name})
                     urls = set()
                     for raw in cards:
-                        if native is not None and isinstance(raw, dict):
-                            # Falabella may broaden a failed query into toys/clothing.
-                            # Avoid fetching unrelated detail pages in every cycle.
-                            text = normalizar(
-                                str(raw.get("displayName", ""))
-                                + " "
-                                + str(raw.get("brand", ""))
-                            )
-                            if not re.search(r"\bpokemon\b", text) or not re.search(
-                                r"\b(tcg|trading|cartas|booster|deck|etb|anniversary|aniversario)\b|elite trainer",
-                                text,
-                            ):
-                                continue
+                        if (
+                            native is not None
+                            and isinstance(raw, dict)
+                            and not relevant_card(raw)
+                        ):
+                            continue
                         try:
                             p = (
                                 self.normalize_native(raw)
@@ -195,15 +289,21 @@ class Falabella:
                         urls.add(p.url)
                         if p.classification == "DESCARTADO":
                             continue
+                        # Retain a discovered URL even if the detail request fails.
+                        listed = p
+                        found.setdefault(p.key, p)
                         if p.url not in cache:
                             try:
                                 cache[p.url] = self.details(p)
                             except RemoteError:
+                                pending_detail(listed)
+                                cache[listed.url] = None
                                 raise
                             except (ValueError, TypeError, AttributeError):
                                 cache[p.url] = None
                         p = cache[p.url]
                         if p is None:
+                            pending_detail(listed)
                             result.complete = False
                             if (
                                 "Ficha Falabella sin datos confirmables"
@@ -215,6 +315,8 @@ class Falabella:
                             continue
                         if p.classification != "DESCARTADO":
                             found[p.key] = p
+                        else:
+                            found.pop(p.key, None)
                     empty = re.search(
                         r"no encontramos (?:resultados|productos)|no se encontraron (?:resultados|productos)|\b0 resultados\b|sin resultados",
                         normalizar(" ".join(page.text)),

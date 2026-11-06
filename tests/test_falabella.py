@@ -43,6 +43,7 @@ class FalabellaTests(unittest.TestCase):
             Settings().for_retailer("falabella"), terms=["pokemon tcg 30"], pages=2
         )
         self.adapter = Falabella(self.settings, self.client)
+        self.adapter.discovery_terms = lambda: self.settings.terms
 
     def product(self, data=None):
         p = self.adapter.normalize(data or raw())
@@ -255,7 +256,9 @@ class FalabellaTests(unittest.TestCase):
         ]
         result = self.adapter.search()
         self.assertFalse(result.complete)
-        self.assertEqual([p.id for p in result.products], ["123456789"])
+        self.assertEqual([p.id for p in result.products], ["999999999", "123456789"])
+        self.assertEqual(result.products[0].classification, "POR_VERIFICAR")
+        self.assertTrue(result.products[0].raw["_detail_error"])
 
     def test_explicit_marketplace_listing_skips_detail(self):
         self.client.get.return_value = html(raw("Other"))
@@ -422,3 +425,210 @@ class FalabellaTests(unittest.TestCase):
         r = self.adapter.search()
         self.assertTrue(r.complete, r.errors)
         self.assertEqual([p.id for p in r.products], ["999999999"])
+
+    def test_abbreviated_espeon_title_is_evaluated_not_dropped(self):
+        url = BASE_URL + "/falabella-pe/product/80233138/tcg-30th-ultra-pc-ing-espeon"
+        card = dict(
+            self.real_card(),
+            productId="80233138",
+            skuId="80233138",
+            url=url,
+            displayName="TCG30TH ULTRA PC ING ESPEON",
+            brand="TCG",
+        )
+        detail = dict(raw(), url=url, name=card["displayName"], brand="TCG")
+        self.client.get.side_effect = [self.native_html([card]), html(detail)]
+        result = self.adapter.search()
+        self.assertTrue(result.complete, result.errors)
+        self.assertEqual(len(result.products), 1)
+        p = result.products[0]
+        self.assertEqual(p.classification, "CANDIDATO")
+        self.assertTrue(p.raw["_falabella_watch"])
+        self.assertEqual(self.adapter.stock(p).state, "DISPONIBLE")
+        self.assertEqual(p.name, card["displayName"])
+
+    def test_generic_tcg_card_retained_without_forcing_identity(self):
+        card = dict(
+            self.real_card(),
+            displayName="Colección Ultra Premium TCG 30 Aniversario Inglés",
+            brand="TCG",
+        )
+        detail = dict(raw(), url=card["url"], name=card["displayName"], brand="TCG")
+        self.client.get.side_effect = [self.native_html([card]), html(detail)]
+        result = self.adapter.search()
+        self.assertTrue(result.complete, result.errors)
+        self.assertEqual(result.products[0].classification, "POR_VERIFICAR")
+        self.assertTrue(result.products[0].raw["_falabella_watch"])
+
+    def test_known_url_survives_bad_detail_and_is_kept_for_direct_polling(self):
+        card = dict(self.real_card(), displayName=NAME)
+        self.client.get.side_effect = [
+            self.native_html([card]),
+            "<p>Not a compatible product page</p>",
+        ]
+        result = self.adapter.search()
+        self.assertFalse(result.complete)
+        self.assertEqual(len(result.products), 1)
+        self.assertEqual(result.products[0].url, card["url"])
+        self.assertTrue(result.products[0].raw["_falabella_watch"])
+        self.assertEqual(result.products[0].classification, "POR_VERIFICAR")
+
+    def test_known_url_survives_detail_http_block(self):
+        card = dict(self.real_card(), displayName=NAME)
+        self.client.get.side_effect = [self.native_html([card]), RemoteError(403)]
+        result = self.adapter.search()
+        self.assertFalse(result.complete)
+        self.assertEqual(len(result.products), 1)
+        self.assertTrue(result.products[0].raw["_falabella_watch"])
+        self.assertEqual(result.products[0].classification, "POR_VERIFICAR")
+
+    def test_broader_queries_find_card_omitted_by_pokemon_query(self):
+        adapter = Falabella(self.settings, self.client)
+        card = dict(self.real_card(), displayName=NAME)
+        queries = []
+
+        def get(url, params=None, **kwargs):
+            if params:
+                queries.append(dict(params))
+                return self.native_html([card] if params["Ntt"] == "tcg 30" else [])
+            return html(dict(raw(), url=card["url"]))
+
+        self.client.get.side_effect = get
+        result = adapter.search()
+        self.assertTrue(result.complete, result.errors)
+        self.assertEqual(len(result.products), 1)
+        self.assertEqual(
+            [q["Ntt"] for q in queries], ["pokemon tcg 30", "tcg 30", "tcg 30th"]
+        )
+        self.assertTrue(all(q[SELLER_PARAM] == "FALABELLA" for q in queries))
+
+    def test_abbreviations_do_not_accept_spanish_or_marketplace(self):
+        for title, seller in [
+            ("TCG 30TH ULTRA PC ING ESP ESPEON", "Falabella"),
+            ("TCG 30TH ULTRA PC ING ESPEON", "Other"),
+        ]:
+            p = self.adapter.normalize(dict(raw(seller), name=title, brand="TCG"))
+            self.assertEqual(p.classification, "DESCARTADO")
+            self.assertFalse(p.raw["_falabella_watch"])
+
+    def test_quantity_30_not_anniversary(self):
+        p = self.adapter.normalize(
+            dict(raw(), name="Pokémon TCG 30 cartas Ultra Premium Inglés", brand="TCG")
+        )
+        self.assertEqual(p.classification, "POR_VERIFICAR")
+        self.assertFalse(p.raw["_falabella_watch"])
+
+    def test_url_alone_never_confirms_edition_language_or_identity(self):
+        p = self.adapter.tracking_stub(
+            BASE_URL + "/falabella-pe/product/80233138/tcg-30th-ultra-pc-ing-espeon"
+        )
+        self.assertEqual(p.classification, "POR_VERIFICAR")
+        self.assertTrue(p.raw["_falabella_watch"])
+        self.assertEqual(self.adapter.stock(p).state, "DESCONOCIDO")
+
+    def test_edition_and_language_not_taken_from_url(self):
+        p = self.adapter.normalize(
+            dict(
+                raw(),
+                url=BASE_URL
+                + "/falabella-pe/product/80233138/tcg-30th-ultra-pc-ing-espeon",
+                name="Colección Ultra Premium TCG Espeon",
+                brand="TCG",
+            )
+        )
+        self.assertEqual(p.classification, "POR_VERIFICAR")
+        self.assertFalse(p.raw["_falabella_watch"])
+
+    def test_saved_pending_url_polled_even_when_search_fails(self):
+        from monitor.app import cycle
+        from monitor.models import SearchResult
+
+        store = Store(":memory:")
+        p = self.adapter.tracking_stub(URL)
+        store.observe(p, Stock())
+        available = self.product()
+        adapter = Mock()
+        adapter.search.return_value = SearchResult(complete=False, errors=["HTTP 502"])
+        adapter.details.return_value = available
+        adapter.stock.return_value = Stock("DISPONIBLE", 289.9, "PEN")
+        with patch("monitor.app.PRODUCTOS", []), patch(
+            "monitor.app.deliver", return_value=True
+        ):
+            cycle(
+                self.settings,
+                store,
+                adapter,
+                Mock(),
+                Mock(),
+                discover=True,
+                retailer="Falabella",
+            )
+        adapter.details.assert_called_once()
+        self.assertEqual(
+            store.db.execute("SELECT count(*) FROM events").fetchone()[0], 1
+        )
+        self.assertEqual(
+            store.db.execute("SELECT state FROM products").fetchone()[0], "DISPONIBLE"
+        )
+        store.close()
+
+    def test_saved_url_not_lost_when_search_does_not_return_it(self):
+        from monitor.app import cycle
+        from monitor.models import SearchResult
+
+        store = Store(":memory:")
+        p = self.product()
+        store.observe(p, Stock("AGOTADO"))
+        adapter = Mock()
+        adapter.search.return_value = SearchResult()
+        adapter.details.return_value = p
+        adapter.stock.return_value = Stock("DISPONIBLE", 289.9, "PEN")
+        with patch("monitor.app.PRODUCTOS", []), patch(
+            "monitor.app.deliver", return_value=True
+        ):
+            cycle(
+                self.settings,
+                store,
+                adapter,
+                Mock(),
+                Mock(),
+                discover=True,
+                retailer="Falabella",
+            )
+        adapter.details.assert_called_once()
+        self.assertEqual(
+            store.db.execute("SELECT count(*) FROM events").fetchone()[0], 1
+        )
+        store.close()
+
+    def test_short_upc_and_spaced_ordinal_recognized_from_actual_title(self):
+        p = self.adapter.normalize(
+            dict(raw(), name="TCG 30 TH UPC ING ESPEON", brand="TCG")
+        )
+        self.assertEqual(p.classification, "CANDIDATO")
+
+    def test_lost_listing_seller_metadata_does_not_forget_previously_verified_url(self):
+        from monitor.app import cycle
+        from monitor.models import SearchResult
+
+        store = Store(":memory:")
+        verified = self.product()
+        store.observe(verified, Stock("AGOTADO"))
+        uncertain = self.adapter.normalize({"name": NAME, "url": URL})
+        uncertain.raw["_detail_error"] = True
+        adapter = Mock()
+        adapter.search.return_value = SearchResult(products=[uncertain], complete=False)
+        with patch("monitor.app.PRODUCTOS", []), patch(
+            "monitor.app.deliver", return_value=True
+        ):
+            cycle(
+                self.settings,
+                store,
+                adapter,
+                Mock(),
+                Mock(),
+                discover=True,
+                retailer="Falabella",
+            )
+        self.assertTrue(store.products()[0].raw["_falabella_watch"])
+        store.close()

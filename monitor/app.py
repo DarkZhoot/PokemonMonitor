@@ -1,4 +1,5 @@
 import argparse
+from dataclasses import asdict
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -144,8 +145,14 @@ def cycle(
         p for p in store.products() if p.retailer == retailer and p.key not in retired
     ]
     # Normal polling visits confirmed targets only; uncertain catalog entries stay stored.
-    products = {p.key: p for p in saved if p.classification == "CANDIDATO"}
+    products = {
+        p.key: p
+        for p in saved
+        if p.classification == "CANDIDATO"
+        or (retailer == "Falabella" and p.raw.get("_falabella_watch") is True)
+    }
     saved_by_url = {p.url: p for p in saved}
+    saved_by_key = {p.key: p for p in saved}
     for raw in PRODUCTOS + settings.products:
         if raw.get("tienda", "Plaza Vea") != retailer:
             continue
@@ -170,6 +177,17 @@ def cycle(
         for p in result.products:
             if p.key in retired:
                 continue
+            previous = saved_by_key.get(p.key)
+            if (
+                retailer == "Falabella"
+                and p.classification != "DESCARTADO"
+                and previous
+                and (
+                    previous.classification == "CANDIDATO"
+                    or previous.raw.get("_falabella_watch")
+                )
+            ):
+                p.raw["_falabella_watch"] = True
             changed = store.note_classification(p)
             decision = p.raw.get("_classification", {})
             if (
@@ -192,7 +210,16 @@ def cycle(
             if p.classification != "CANDIDATO":
                 # Discovery metadata is sufficient to retain a pending entry, without
                 # paying for another detail request or changing any known stock.
-                store.observe(p, Stock(detail="Idioma o edición pendiente/excluida"))
+                store.observe(
+                    p,
+                    Stock(
+                        detail=(
+                            "Ficha no verificable; URL conservada"
+                            if p.raw.get("_detail_error")
+                            else "Idioma o edición pendiente/excluida"
+                        )
+                    ),
+                )
                 products.pop(p.key, None)
                 continue
             products[p.key] = p
@@ -220,14 +247,28 @@ def cycle(
             if p.key in retired or p.key in seen:
                 continue
             seen.add(p.key)
-            stock = (
-                adapter.stock(p)
-                if p.classification == "CANDIDATO"
-                else Stock(detail="Identidad, idioma o edición pendiente/excluida")
-            )
-        except (RemoteError, ValueError, TypeError, AttributeError):
+            if p.classification == "CANDIDATO":
+                stock = adapter.stock(p)
+            elif retailer == "Falabella":
+                missing = p.raw.get("_classification", {}).get("missing", []) or [
+                    "vendedor confirmado"
+                ]
+                stock = Stock(detail="Pendiente: " + ", ".join(missing))
+            else:
+                stock = Stock(detail="Identidad, idioma o edición pendiente/excluida")
+        except (RemoteError, ValueError, TypeError, AttributeError) as error:
             p = product
-            stock = Stock(detail="Error de consulta; no se infiere agotado")
+            detail = "Error de consulta; no se infiere agotado"
+            if retailer == "Falabella":
+                if isinstance(error, RemoteError):
+                    detail = (
+                        f"Error HTTP {error.status}; URL conservada"
+                        if error.status
+                        else "Error de conexión; URL conservada"
+                    )
+                else:
+                    detail = "Ficha no interpretable o identidad no verificable; URL conservada"
+            stock = Stock(detail=detail)
             healthy = False
         except Exception:
             p = product
@@ -389,6 +430,11 @@ def main():
         metavar="TIENDA:ID",
         help="Reactivar un producto retirado; repetible",
     )
+    group.add_argument(
+        "--track-url",
+        metavar="URL",
+        help="Guardar una ficha directa de Falabella para revisarla aunque no aparezca en búsqueda",
+    )
     parser.add_argument(
         "--retailer",
         choices=["plazavea", "oechsle", "ripley", "ilahui", "tailoy", "falabella"],
@@ -400,6 +446,8 @@ def main():
         help="Con --list-products, incluir POR_VERIFICAR y motivos pendientes",
     )
     args = parser.parse_args()
+    if args.track_url and args.retailer != "falabella":
+        parser.error("--track-url requiere --retailer falabella")
     if args.include_pending and not args.list_products:
         parser.error("--include-pending requiere --list-products")
     settings = Settings.load()
@@ -411,6 +459,64 @@ def main():
             try:
                 store.migrate(ROOT)
                 enforce_seller_scopes(store, log)
+                if args.track_url:
+                    try:
+                        stub = Falabella(
+                            settings.for_retailer("falabella")
+                        ).tracking_stub(args.track_url)
+                    except (ValueError, TypeError):
+                        log(
+                            "product_tracking_failed", error="URL de Falabella inválida"
+                        )
+                        return 1
+                    if stub.key in store.retired_keys():
+                        log(
+                            "product_tracking_failed",
+                            error="El producto está retirado; restaurarlo explícitamente antes de seguirlo",
+                        )
+                        return 1
+                    existing = next(
+                        (p for p in store.products() if p.key == stub.key), None
+                    )
+                    product = existing or stub
+                    product.raw["_falabella_watch"] = True
+                    product.raw["_explicit_watch"] = True
+                    if existing:
+                        row = store.db.execute(
+                            "SELECT state,last_known FROM products WHERE key=?",
+                            (product.key,),
+                        ).fetchone()
+                        counts = dict(
+                            store.db.execute(
+                                "SELECT status,count(*) FROM events WHERE product_key=? GROUP BY status",
+                                (product.key,),
+                            )
+                        )
+                        log(
+                            "product_tracking_existing",
+                            product_key=product.key,
+                            classification=product.classification,
+                            state=row["state"],
+                            last_known=row["last_known"],
+                            alerts=counts,
+                        )
+                        with store.db:
+                            store.db.execute(
+                                "UPDATE products SET data=? WHERE key=?",
+                                (
+                                    json.dumps(asdict(product), ensure_ascii=False),
+                                    product.key,
+                                ),
+                            )
+                    else:
+                        store.observe(
+                            product,
+                            Stock(
+                                detail="URL guardada; pendiente verificar identidad, vendedor y stock"
+                            ),
+                        )
+                    log("product_url_saved", product_key=product.key, url=product.url)
+                    return 0
                 if args.retire_product or args.restore_product:
                     keys = args.retire_product or args.restore_product
                     known = {p.key for p in store.products()}
