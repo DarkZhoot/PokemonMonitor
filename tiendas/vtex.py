@@ -6,13 +6,14 @@ from urllib.parse import urljoin
 from monitor.http import Client, RemoteError
 from monitor.models import Product, SearchResult, Stock, normalize_url
 from monitor.settings import Settings
+from monitor.discovery import DiscoveryPolicy, remember
 from monitor.classification import classify, normalizar, assess, annotated_raw
 
 BASE_URL = "https://www.plazavea.com.pe"
 API = BASE_URL + "/api/catalog_system/pub/products/search"
 
 
-class VtexRetailer:
+class VtexRetailer(DiscoveryPolicy):
     base_url = BASE_URL
     retailer = "Plaza Vea"
 
@@ -50,7 +51,7 @@ class VtexRetailer:
     def search(self):
         result = SearchResult()
         found = {}
-        for term in self.settings.terms:
+        for term in self.discovery_terms():
             seen = set()
             for page in range(self.settings.pages):
                 try:
@@ -64,10 +65,30 @@ class VtexRetailer:
                         raise ValueError("Respuesta no es lista")
                     ids = set()
                     for raw in data:
-                        p = self.normalize(raw)
+                        try:
+                            p = self.normalize(raw)
+                        except (ValueError, TypeError, AttributeError):
+                            result.complete = False
+                            result.errors.append(
+                                "Producto de catálogo incompleto; conservar URL si es verificable"
+                            )
+                            if not isinstance(raw, dict):
+                                continue
+                            link = raw.get("link") or (
+                                "/" + raw["linkText"] + "/p"
+                                if raw.get("linkText")
+                                else ""
+                            )
+                            try:
+                                p = self.failed_url(
+                                    urljoin(self.base_url, link),
+                                    str(raw.get("productName") or ""),
+                                    raw,
+                                )
+                            except (ValueError, TypeError):
+                                continue
                         ids.add(p.id)
-                        if p.classification != "DESCARTADO":
-                            found[p.id] = p
+                        remember(found, p)
                     if not ids - seen:
                         result.complete = False
                         result.errors.append("Resultados repetidos")
@@ -99,7 +120,7 @@ class VtexRetailer:
         normalize_url(product.url, self.retailer)
         data = (
             self.client.get(self.api, dict(self.params(), fq="productId:" + product.id))
-            if product.id
+            if product.id and not product.id.startswith("url:")
             else []
         )
         if isinstance(data, list):

@@ -82,7 +82,7 @@ class TrackingURLTests(unittest.TestCase):
         store = Store(self.path)
         row = store.db.execute("SELECT state,last_known FROM products").fetchone()
         self.assertEqual(tuple(row), ("AGOTADO", "AGOTADO"))
-        self.assertTrue(store.products()[0].raw["_falabella_watch"])
+        self.assertTrue(store.products()[0].raw["_watch"])
         store.close()
 
     def test_retired_not_silently_restored(self):

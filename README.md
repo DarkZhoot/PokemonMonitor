@@ -726,7 +726,9 @@ Telegram de disponibilidad. La cola de stock no recibe productos sin confirmar.
 
 En una tarjeta nativa Ripley de TCG 30 aniversario que omite identidad/idioma,
 se intenta leer su ficha directa para enriquecer metadatos: máximo tres por
-búsqueda y una vez cada cuatro horas por producto. No se recorren sitemaps,
+búsqueda y una vez cada cuatro horas por producto para ese enriquecimiento inicial.
+Los enlaces marcados para seguimiento directo se verifican además en sus ciclos
+regulares con la política común descrita más abajo. No se recorren sitemaps,
 categorías ni enlaces ocultos. Se detiene el enriquecimiento al recibir 401/403/429;
 no se eluden bloqueos ni se infiere identidad a partir del término buscado. Las
 otras integraciones ya reciben detalles de producto en su flujo habitual.
@@ -805,16 +807,16 @@ ninguna de esas causas de envío por sí solo. Una entrega de transporte inciert
 puede haber sido recibida aunque falte confirmación; la cola no garantiza entrega
 exactamente una vez ante fallos de red o cierre del proceso durante el envío.
 
-## Falabella: conservar fichas y no exigir Pokémon en el prefiltro
+## Política común de descubrimiento y conservación para las seis tiendas
 
 El prefiltro de tarjetas de Falabella exigía Pokémon antes de consultar la ficha,
 aunque el clasificador ya admitía identidad por variantes/modelos. Una tarjeta
 con marca TCG y nombre abreviado podía descartarse antes de ese clasificador.
 Ahora se admiten tarjetas de familias TCG 30 aniversario sin esa palabra, y se
-agregan solo a Falabella las consultas `tcg 30` y `tcg 30th`, con filtro de vendedor
-propio en todas las páginas y deduplicación de detalles entre términos.
+agregan a las seis tiendas las consultas `tcg 30` y `tcg 30th`, conservando los filtros de vendedor propio donde corresponden y la deduplicación
+de detalles entre términos. La política se centraliza en `monitor/discovery.py`.
 
-En el contexto de familias de cartas TCG, el adaptador reconoce abreviaturas en
+En el contexto de familias de cartas TCG, el clasificador común reconoce abreviaturas en
 el título real (`TCG30TH`, `30TH`, `30 TH`, `ULTRA PC`, `UPC`, `ING`). Conserva el
 nombre original y registra aliases en metadata. No deduce identidad, edición,
 idioma ni stock del slug de URL. `ESP` explícito se convierte en evidencia de español,
@@ -823,13 +825,21 @@ explícito; marketplace no aporta disponibilidad a una oferta propia agotada.
 
 Una URL descubierta no se pierde si falla su detalle: se almacena pendiente,
 marcada con `_detail_error`, y la búsqueda informa incompletitud. Las fichas
-cercanas al objetivo con venta propia comprobada se marcan `_falabella_watch`;
-se siguen consultando por enlace directo en los ciclos de Falabella aunque el
+cercanas al objetivo se marcan `_watch` en las seis tiendas;
+se siguen consultando por enlace directo en sus ciclos independientes aunque el
 buscador las omita o esté esperando su siguiente reintento. Una ficha sin evidencia
 suficiente queda desconocida y no genera alertas. Un dato posterior incompleto no
 borra la intención de vigilar un enlace previamente confirmado.
 
-Para registrar una publicación que el usuario ya encontró, con el servicio detenido:
+La retención y el seguimiento directo son comunes a Plaza Vea, Oechsle, Ripley,
+Ilahui, Tai Loy y Falabella. Un fallo de búsqueda no elimina las fichas guardadas;
+un fallo de detalle conserva URL e historial y registra estado desconocido, sin
+inventar agotado. Las URL retiradas no se reactivan con un identificador temporal.
+Las tarjetas con solo metadata pendiente pueden completar su identidad consultando
+la ficha; solo un candidato verificado puede generar una alerta de disponibilidad.
+
+Para registrar una publicación que el usuario ya encontró, con el servicio detenido
+(`--track-url` admite cualquiera de las seis opciones de `--retailer`):
 
 ```bash
 .venv/bin/python main.py --retailer falabella --track-url "https://www.falabella.com.pe/falabella-pe/product/80233138/tcg-30th-ultra-pc-ing-espeon"

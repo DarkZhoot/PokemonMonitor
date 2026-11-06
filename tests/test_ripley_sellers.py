@@ -18,6 +18,9 @@ from test_ripley import native, schema, listing, detail_html, URL
 
 class RipleySellerTests(unittest.TestCase):
     def setUp(self):
+        query_policy = patch("monitor.discovery.EXTRA_SEARCH_TERMS", ())
+        query_policy.start()
+        self.addCleanup(query_policy.stop)
         self.adapter = Ripley(
             Settings(terms=["pokemon"]).for_retailer("ripley"), Mock()
         )

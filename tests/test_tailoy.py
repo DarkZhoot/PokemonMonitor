@@ -89,6 +89,9 @@ def listing(next_page=False):
 
 class TailoyTests(unittest.TestCase):
     def setUp(self):
+        query_policy = patch("monitor.discovery.EXTRA_SEARCH_TERMS", ())
+        query_policy.start()
+        self.addCleanup(query_policy.stop)
         self.s = Settings(terms=["pokemon tcg 30 ingles"]).for_retailer("tailoy")
         self.a = Tailoy(self.s, Mock())
 

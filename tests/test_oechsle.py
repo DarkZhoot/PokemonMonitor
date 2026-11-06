@@ -45,6 +45,9 @@ def fixture():
 
 class OechsleTests(unittest.TestCase):
     def setUp(self):
+        query_policy = patch("monitor.discovery.EXTRA_SEARCH_TERMS", ())
+        query_policy.start()
+        self.addCleanup(query_policy.stop)
         self.settings = Settings().for_retailer("oechsle")
         self.adapter = Oechsle(self.settings, Mock())
 

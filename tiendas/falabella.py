@@ -11,6 +11,14 @@ from urllib.parse import urljoin, urlsplit, parse_qs
 from monitor.http import Client, RemoteError
 from monitor.models import Product, SearchResult, Stock, normalize_url
 from monitor.settings import Settings
+from monitor.discovery import (
+    DiscoveryPolicy,
+    remember,
+    pending_detail,
+    relevant_card,
+    should_watch,
+    tracking_stub,
+)
 from monitor.classification import assess, annotated_raw
 from monitor.sellers import restrict_falabella, falabella_offer_seller
 from tiendas.ripley import CatalogHTML, evidence
@@ -21,81 +29,7 @@ SEARCH_URL = BASE_URL + "/falabella-pe/search"
 SELLER_PARAM = "f.derived.variant.sellerId"
 
 
-EXTRA_SEARCH_TERMS = ("tcg 30", "tcg 30th")
-
-
-def falabella_evidence(raw):
-    metadata = evidence(raw)
-    name = re.sub(
-        r"\btcg(?=30(?:th)?\b)",
-        "TCG ",
-        str(metadata.get("productName") or ""),
-        flags=re.IGNORECASE,
-    )
-    context = normalizar(name + " " + str(metadata.get("brand") or ""))
-    family = re.search(
-        r"\b(ultra\s+(?:pc|premium)|upc|mini\s+tin|booster|binder|elite\s+trainer|etb|figure|figura)\b",
-        context,
-    )
-    aliases = []
-    if family and re.search(r"\b(tcg|trading card game)\b", context):
-        if re.search(r"\b30\s*th\b", name, re.IGNORECASE) and not re.search(
-            r"anniversary|aniversario", name, re.IGNORECASE
-        ):
-            name = re.sub(r"\b30\s*th\b", "30th anniversary", name, flags=re.IGNORECASE)
-            aliases.append("30th: aniversario en familia TCG")
-        if re.search(r"\bing\b", name, re.IGNORECASE):
-            name = re.sub(r"\bing\b", "ingles", name, flags=re.IGNORECASE)
-            aliases.append("ing: ingles")
-        # A bilingual abbreviation must not be silently treated as English-only.
-        name = re.sub(r"\besp\b", "espanol", name, flags=re.IGNORECASE)
-    metadata["productName"] = name
-    return metadata, aliases
-
-
-def near_anniversary(metadata):
-    text = normalizar(
-        str(metadata.get("productName") or "") + " " + str(metadata.get("brand") or "")
-    )
-    return bool(
-        re.search(r"\b(tcg|trading card game)\b", text)
-        and re.search(r"\b30\s*th\b|\b30\s*[.oº°]*\s*(aniversario|anniversary)\b", text)
-    )
-
-
-def relevant_card(raw):
-    text = normalizar(
-        str(raw.get("displayName") or "") + " " + str(raw.get("brand") or "")
-    )
-    text = re.sub(r"\btcg(?=30(?:th)?\b)", "tcg ", text)
-    card = re.search(
-        r"\b(tcg|trading|cartas|booster|deck|etb|binder|mini tin)\b|elite trainer|ultra (?:pc|premium)",
-        text,
-    )
-    return bool(
-        card
-        and (
-            re.search(r"\bpokemon\b", text)
-            or re.search(
-                r"\b30\s*th\b|\b30\s*[.oº°]*\s*(aniversario|anniversary)\b", text
-            )
-        )
-    )
-
-
-def pending_detail(product):
-    product.classification = "POR_VERIFICAR"
-    product.raw["_detail_error"] = True
-    previous = product.raw.get("_classification", {})
-    missing = list(
-        dict.fromkeys(previous.get("missing", []) + ["detalles verificables de ficha"])
-    )
-    product.raw["_classification"] = dict(
-        previous, classification="POR_VERIFICAR", review_needed=True, missing=missing
-    )
-
-
-class Falabella:
+class Falabella(DiscoveryPolicy):
     retailer = "Falabella"
 
     def __init__(self, settings=None, client=None):
@@ -108,7 +42,7 @@ class Falabella:
     def normalize(self, raw):
         url = normalize_url(urljoin(BASE_URL, raw.get("url", "")), self.retailer)
         identifier = urlsplit(url).path.split("/")[3]
-        metadata, aliases = falabella_evidence(raw)
+        metadata = evidence(raw)
         decision = assess(metadata, self.settings.exclusions)
         product = restrict_falabella(
             Product(
@@ -120,28 +54,11 @@ class Falabella:
                 raw=annotated_raw({"schema": raw, "_needs_details": True}, decision),
             )
         )
-        offers = raw.get("offers") or []
-        if isinstance(offers, dict):
-            offers = [offers]
-        product.raw["_falabella_watch"] = (
-            product.classification != "DESCARTADO"
-            and near_anniversary(metadata)
-            and isinstance(offers, list)
-            and any(falabella_offer_seller(x) == "falabella" for x in offers)
-        )
-        if aliases:
-            product.raw["_metadata_aliases"] = aliases
+        product.raw["_falabella_watch"] = should_watch(product)
         return product
-
-    def discovery_terms(self):
-        return list(dict.fromkeys(self.settings.terms + list(EXTRA_SEARCH_TERMS)))
 
     def tracking_stub(self, url):
-        product = self.normalize({"url": normalize_url(url, self.retailer), "name": ""})
-        product.name = "Producto Falabella pendiente de verificar"
-        product.raw["_falabella_watch"] = True
-        product.raw["_explicit_watch"] = True
-        return product
+        return tracking_stub(url, self.retailer, explicit=True)
 
     def native_listing(self, page):
         data = page.next_data
@@ -192,6 +109,7 @@ class Falabella:
         identifier = raw.get("productId")
         if not isinstance(identifier, str) or identifier != product.id:
             raise ValueError("Identificador no coincide con la URL Falabella")
+        product.raw["_metadata_only"] = True
         product.raw["native_listing"] = {
             k: raw.get(k) for k in ("productId", "skuId", "sellerId", "sellerName")
         }
@@ -266,7 +184,12 @@ class Falabella:
                         if (
                             native is not None
                             and isinstance(raw, dict)
-                            and not relevant_card(raw)
+                            and not relevant_card(
+                                {
+                                    "productName": raw.get("displayName"),
+                                    "brand": raw.get("brand"),
+                                }
+                            )
                         ):
                             continue
                         try:
@@ -313,10 +236,7 @@ class Falabella:
                                     "Ficha Falabella sin datos confirmables"
                                 )
                             continue
-                        if p.classification != "DESCARTADO":
-                            found[p.key] = p
-                        else:
-                            found.pop(p.key, None)
+                        remember(found, p)
                     empty = re.search(
                         r"no encontramos (?:resultados|productos)|no se encontraron (?:resultados|productos)|\b0 resultados\b|sin resultados",
                         normalizar(" ".join(page.text)),

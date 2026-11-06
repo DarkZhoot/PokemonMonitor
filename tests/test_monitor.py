@@ -49,6 +49,9 @@ def response(code=200, data=None, headers=None):
 
 class AdapterTests(unittest.TestCase):
     def setUp(self):
+        query_policy = patch("monitor.discovery.EXTRA_SEARCH_TERMS", ())
+        query_policy.start()
+        self.addCleanup(query_policy.stop)
         self.s = Settings(context_confirmed=True, terms=["pokemon"], retries=1)
         self.a = PlazaVea(self.s, Mock())
 
@@ -198,6 +201,9 @@ class AdapterTests(unittest.TestCase):
 
 class HttpTests(unittest.TestCase):
     def setUp(self):
+        query_policy = patch("monitor.discovery.EXTRA_SEARCH_TERMS", ())
+        query_policy.start()
+        self.addCleanup(query_policy.stop)
         self.c = Client(Settings(retries=2, request_delay=0))
         self.c.session = Mock()
 
@@ -234,6 +240,9 @@ class HttpTests(unittest.TestCase):
 
 class StoreTests(unittest.TestCase):
     def setUp(self):
+        query_policy = patch("monitor.discovery.EXTRA_SEARCH_TERMS", ())
+        query_policy.start()
+        self.addCleanup(query_policy.stop)
         self.store = Store(":memory:")
         self.p = PlazaVea().normalize(raw())
 
@@ -312,6 +321,9 @@ class StoreTests(unittest.TestCase):
 
 class TelegramTests(unittest.TestCase):
     def setUp(self):
+        query_policy = patch("monitor.discovery.EXTRA_SEARCH_TERMS", ())
+        query_policy.start()
+        self.addCleanup(query_policy.stop)
         self.s = Settings(token="test-secret", chat_id="123")
         self.t = Telegram(self.s)
         self.t.session = Mock()
@@ -576,13 +588,14 @@ class RegressionTests(unittest.TestCase):
 
 class MonitoringModeTests(unittest.TestCase):
     @patch("monitor.app.PRODUCTOS", [])
-    def test_normal_mode_never_searches_or_checks_pending(self):
+    def test_normal_mode_skips_unmarked_pending_without_search(self):
         store = Store(":memory:")
         target = PlazaVea().normalize(raw())
         pending = copy.deepcopy(target)
         pending.id = "pending"
         pending.url = "https://www.plazavea.com.pe/pending/p"
         pending.classification = "POR_VERIFICAR"
+        pending.raw["_watch"] = False
         store.observe(target, Stock("AGOTADO"))
         store.observe(pending, Stock())
         adapter = Mock()

@@ -63,6 +63,17 @@ class Store:
             )
         }
 
+    def retired_urls(self):
+        return {
+            (p["retailer"], p["url"])
+            for p in (
+                json.loads(row[0])
+                for row in self.db.execute(
+                    "SELECT p.data FROM products p JOIN meta m ON m.key='retired:' || p.key"
+                )
+            )
+        }
+
     def retire_product(self, key):
         if not self.db.execute("SELECT 1 FROM products WHERE key=?", (key,)).fetchone():
             raise ValueError("Producto no registrado")
@@ -208,6 +219,8 @@ class Store:
         if self.db.execute(
             "SELECT 1 FROM meta WHERE key=?", ("retired:" + product.key,)
         ).fetchone():
+            return None
+        if (product.retailer, product.url) in self.retired_urls():
             return None
         restrict_ripley(product)
         restrict_oechsle(product)

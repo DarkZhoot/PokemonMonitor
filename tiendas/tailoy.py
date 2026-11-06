@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlsplit, parse_qs
 from monitor.http import Client, RemoteError
 from monitor.models import Product, SearchResult, Stock, normalize_url
 from monitor.settings import Settings
+from monitor.discovery import DiscoveryPolicy, remember
 from monitor.classification import assess, annotated_raw
 from tiendas.ripley import CatalogHTML, evidence
 from tiendas.vtex import normalizar
@@ -118,7 +119,7 @@ class TailoyHTML(CatalogHTML):
         super().handle_endtag(tag)
 
 
-class Tailoy:
+class Tailoy(DiscoveryPolicy):
     base_url = BASE_URL
     retailer = "Tai Loy"
 
@@ -243,7 +244,7 @@ class Tailoy:
         result = SearchResult()
         found = {}
         cache = {}
-        for term in self.settings.terms:
+        for term in self.discovery_terms():
             seen = set()
             for page_number in range(1, self.settings.pages + 1):
                 try:
@@ -258,6 +259,15 @@ class Tailoy:
                     links = list(page.product_links)
                     links.extend(p.get("url") for p in page.products if p.get("url"))
                     urls = []
+                    link_names = {}
+                    for href, label in page.links:
+                        try:
+                            link = normalize_url(urljoin(BASE_URL, href), self.retailer)
+                            link_names[link] = (
+                                link_names.get(link, "") + " " + label
+                            ).strip()
+                        except (ValueError, TypeError):
+                            pass
                     for link in links:
                         try:
                             url = normalize_url(urljoin(BASE_URL, link), "Tai Loy")
@@ -286,9 +296,11 @@ class Tailoy:
                                     Product("", "", url, retailer="Tai Loy")
                                 )
                             p = cache[url]
-                            if p.classification != "DESCARTADO":
-                                found[p.key] = p
+                            remember(found, p)
                         except (RemoteError, ValueError, TypeError, AttributeError):
+                            p = self.failed_url(url, link_names.get(url, ""))
+                            cache[url] = p
+                            remember(found, p)
                             result.complete = False
                             result.errors.append(
                                 "Ficha no verificable; no se infiere stock"

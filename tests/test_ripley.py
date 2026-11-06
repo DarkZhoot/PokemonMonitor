@@ -77,6 +77,9 @@ def listing(products=None, total=None, offset=0, limit=48, links=None):
 
 class RipleyAdapterTests(unittest.TestCase):
     def setUp(self):
+        query_policy = patch("monitor.discovery.EXTRA_SEARCH_TERMS", ())
+        query_policy.start()
+        self.addCleanup(query_policy.stop)
         self.s = Settings(terms=["pokemon"], pages=3).for_retailer("ripley")
         self.a = Ripley(self.s, Mock())
 

@@ -114,7 +114,37 @@ def pokemon_identity(raw):
     return None
 
 
+def canonical_metadata(raw):
+    metadata = dict(raw)
+    name = re.sub(
+        r"\btcg(?=30(?:th)?\b)",
+        "TCG ",
+        str(metadata.get("productName") or ""),
+        flags=re.IGNORECASE,
+    )
+    context = normalizar(name + " " + str(metadata.get("brand") or ""))
+    family = re.search(
+        r"\b(ultra\s+(?:pc|premium)|upc|mini\s+tin|booster|binder|elite\s+trainer|etb|figure|figura)\b",
+        context,
+    )
+    aliases = []
+    if family and re.search(r"\b(tcg|trading card game)\b", context):
+        if re.search(r"\b30\s*th\b", name, re.IGNORECASE) and not re.search(
+            r"anniversary|aniversario", name, re.IGNORECASE
+        ):
+            name = re.sub(r"\b30\s*th\b", "30th anniversary", name, flags=re.IGNORECASE)
+            aliases.append("30th: aniversario en familia TCG")
+        if re.search(r"\bing\b", name, re.IGNORECASE):
+            name = re.sub(r"\bing\b", "ingles", name, flags=re.IGNORECASE)
+            aliases.append("ing: ingles")
+        # A bilingual abbreviation must not be silently treated as English-only.
+        name = re.sub(r"\besp\b", "espanol", name, flags=re.IGNORECASE)
+    metadata["productName"] = name
+    return metadata, aliases
+
+
 def assess(raw, exclusions):
+    raw, aliases = canonical_metadata(raw)
     text = normalizar(" ".join(text_value(x) for x in metadata_fields(raw)))
     excluded = [
         x
@@ -145,6 +175,8 @@ def assess(raw, exclusions):
     status = "DESCARTADO" if excluded else ("POR_VERIFICAR" if missing else "CANDIDATO")
     return {
         "classification": status,
+        "metadata_aliases": aliases,
+        "watch_eligible": status != "DESCARTADO" and tcg and edition,
         "missing": missing,
         "excluded": excluded,
         "identity_evidence": proof,
@@ -159,7 +191,11 @@ def classify(raw, exclusions):
 
 
 def annotated_raw(raw, decision):
-    data = dict(raw, _classification=decision)
+    data = dict(
+        raw, _classification=decision, _watch=decision.get("watch_eligible", False)
+    )
+    if decision.get("metadata_aliases"):
+        data["_metadata_aliases"] = decision["metadata_aliases"]
     proof = decision["identity_evidence"]
     if proof and proof["source"] != "explicit_pokemon":
         data["_identity_evidence"] = proof

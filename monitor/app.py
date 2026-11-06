@@ -6,9 +6,15 @@ from logging.handlers import RotatingFileHandler
 import time
 from config import PRODUCTOS
 from monitor.http import RemoteError
+from monitor.discovery import (
+    should_watch,
+    inherit_tracking,
+    tracking_stub,
+    pending_detail,
+)
 from monitor.polling import RetailerPolling
 from monitor.locking import exclusive, AlreadyRunning
-from monitor.models import Product, Stock, normalize_url
+from monitor.models import Product, Stock, normalize_url, RETAILERS
 from monitor.settings import Settings, ROOT
 from monitor.sellers import enforce_seller_scopes, ripley_seller, oechsle_seller
 from monitor.store import Store, now
@@ -83,6 +89,7 @@ def enrich_listing_metadata(result, adapter, store, retired, log, retailer):
                 raise ValueError("Identidad distinta")
             result.products[index] = detailed
         except RemoteError as error:
+            pending_detail(product)
             log(
                 "metadata_enrichment_failed",
                 retailer=retailer,
@@ -92,6 +99,7 @@ def enrich_listing_metadata(result, adapter, store, retired, log, retailer):
             if error.status in (401, 403, 429):
                 break
         except (ValueError, TypeError, AttributeError):
+            pending_detail(product)
             log(
                 "metadata_enrichment_failed",
                 retailer=retailer,
@@ -139,18 +147,18 @@ def cycle(
             healthy = False
             log("search_incomplete", retailer=retailer, errors=result.errors)
     retired = store.retired_keys()
+    retired_urls = store.retired_urls()
     if result:
         enrich_listing_metadata(result, adapter, store, retired, log, retailer)
     saved = [
-        p for p in store.products() if p.retailer == retailer and p.key not in retired
+        p
+        for p in store.products()
+        if p.retailer == retailer
+        and p.key not in retired
+        and (p.retailer, p.url) not in retired_urls
     ]
-    # Normal polling visits confirmed targets only; uncertain catalog entries stay stored.
-    products = {
-        p.key: p
-        for p in saved
-        if p.classification == "CANDIDATO"
-        or (retailer == "Falabella" and p.raw.get("_falabella_watch") is True)
-    }
+    # Poll confirmed targets and retained near-target/explicit URLs; verify before alerting.
+    products = {p.key: p for p in saved if should_watch(p)}
     saved_by_url = {p.url: p for p in saved}
     saved_by_key = {p.key: p for p in saved}
     for raw in PRODUCTOS + settings.products:
@@ -165,7 +173,7 @@ def cycle(
                 url,
                 retailer=retailer,
             )
-        if p.key in retired:
+        if p.key in retired or (p.retailer, p.url) in retired_urls:
             continue
         if retailer == "Ripley" and ripley_seller(p) == "marketplace":
             continue
@@ -175,19 +183,13 @@ def cycle(
     fresh = set()
     if result:
         for p in result.products:
-            if p.key in retired:
+            if p.key in retired or (p.retailer, p.url) in retired_urls:
                 continue
-            previous = saved_by_key.get(p.key)
-            if (
-                retailer == "Falabella"
-                and p.classification != "DESCARTADO"
-                and previous
-                and (
-                    previous.classification == "CANDIDATO"
-                    or previous.raw.get("_falabella_watch")
-                )
-            ):
-                p.raw["_falabella_watch"] = True
+            previous = saved_by_key.get(p.key) or saved_by_url.get(p.url)
+            if previous:
+                if p.raw.get("_detail_error") and p.id.startswith("url:"):
+                    p.id = previous.id
+                inherit_tracking(previous, p)
             changed = store.note_classification(p)
             decision = p.raw.get("_classification", {})
             if (
@@ -220,7 +222,15 @@ def cycle(
                         )
                     ),
                 )
-                products.pop(p.key, None)
+                if (
+                    should_watch(p)
+                    and p.raw.get("_metadata_only")
+                    and not p.raw.get("_detail_error")
+                ):
+                    p.raw["_needs_details"] = True
+                    products[p.key] = p
+                else:
+                    products.pop(p.key, None)
                 continue
             products[p.key] = p
             fresh.add(p.key)
@@ -244,12 +254,13 @@ def cycle(
                 if product.key in fresh and not product.raw.get("_needs_details")
                 else adapter.details(product)
             )
-            if p.key in retired or p.key in seen:
+            if p.key in retired or (p.retailer, p.url) in retired_urls or p.key in seen:
                 continue
             seen.add(p.key)
+            inherit_tracking(product, p)
             if p.classification == "CANDIDATO":
                 stock = adapter.stock(p)
-            elif retailer == "Falabella":
+            elif p.classification == "POR_VERIFICAR":
                 missing = p.raw.get("_classification", {}).get("missing", []) or [
                     "vendedor confirmado"
                 ]
@@ -259,15 +270,16 @@ def cycle(
         except (RemoteError, ValueError, TypeError, AttributeError) as error:
             p = product
             detail = "Error de consulta; no se infiere agotado"
-            if retailer == "Falabella":
-                if isinstance(error, RemoteError):
-                    detail = (
-                        f"Error HTTP {error.status}; URL conservada"
-                        if error.status
-                        else "Error de conexión; URL conservada"
-                    )
-                else:
-                    detail = "Ficha no interpretable o identidad no verificable; URL conservada"
+            if isinstance(error, RemoteError):
+                detail = (
+                    f"Error HTTP {error.status}; URL conservada"
+                    if error.status
+                    else "Error de conexión; URL conservada"
+                )
+            elif product.raw.get("_watch") or product.raw.get("_explicit_watch"):
+                detail = (
+                    "Ficha no interpretable o identidad no verificable; URL conservada"
+                )
             stock = Stock(detail=detail)
             healthy = False
         except Exception:
@@ -433,7 +445,7 @@ def main():
     group.add_argument(
         "--track-url",
         metavar="URL",
-        help="Guardar una ficha directa de Falabella para revisarla aunque no aparezca en búsqueda",
+        help="Guardar una ficha del retailer seleccionado para revisión directa",
     )
     parser.add_argument(
         "--retailer",
@@ -446,8 +458,8 @@ def main():
         help="Con --list-products, incluir POR_VERIFICAR y motivos pendientes",
     )
     args = parser.parse_args()
-    if args.track_url and args.retailer != "falabella":
-        parser.error("--track-url requiere --retailer falabella")
+    if args.track_url and not args.retailer:
+        parser.error("--track-url requiere --retailer")
     if args.include_pending and not args.list_products:
         parser.error("--include-pending requiere --list-products")
     settings = Settings.load()
@@ -461,12 +473,16 @@ def main():
                 enforce_seller_scopes(store, log)
                 if args.track_url:
                     try:
-                        stub = Falabella(
-                            settings.for_retailer("falabella")
-                        ).tracking_stub(args.track_url)
+                        name = next(
+                            name
+                            for name, values in RETAILERS.items()
+                            if values[0] == args.retailer
+                        )
+                        stub = tracking_stub(args.track_url, name, explicit=True)
                     except (ValueError, TypeError):
                         log(
-                            "product_tracking_failed", error="URL de Falabella inválida"
+                            "product_tracking_failed",
+                            error="URL inválida para el retailer seleccionado",
                         )
                         return 1
                     if stub.key in store.retired_keys():
@@ -476,10 +492,24 @@ def main():
                         )
                         return 1
                     existing = next(
-                        (p for p in store.products() if p.key == stub.key), None
+                        (
+                            p
+                            for p in store.products()
+                            if p.key == stub.key or p.url == stub.url
+                        ),
+                        None,
                     )
                     product = existing or stub
-                    product.raw["_falabella_watch"] = True
+                    if (
+                        product.key in store.retired_keys()
+                        or (product.retailer, product.url) in store.retired_urls()
+                    ):
+                        log(
+                            "product_tracking_failed",
+                            error="Producto retirado; requiere restauración explícita",
+                        )
+                        return 1
+                    product.raw["_watch"] = True
                     product.raw["_explicit_watch"] = True
                     if existing:
                         row = store.db.execute(

@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qs, urlencode, quo
 from monitor.http import Client, RemoteError
 from monitor.models import Product, SearchResult, Stock, normalize_url
 from monitor.settings import Settings
+from monitor.discovery import DiscoveryPolicy, remember, pending_detail, relevant_card
 from monitor.sellers import restrict_ripley, ripley_seller, schema_seller
 from tiendas.vtex import normalizar
 from monitor.classification import assess, annotated_raw
@@ -134,7 +135,7 @@ def evidence(raw):
     return data
 
 
-class Ripley:
+class Ripley(DiscoveryPolicy):
     base_url = BASE_URL
     retailer = "Ripley"
 
@@ -203,7 +204,10 @@ class Ripley:
                 url,
                 decision["classification"],
                 retailer="Ripley",
-                raw=annotated_raw({"native": raw, "_needs_details": False}, decision),
+                raw=annotated_raw(
+                    {"native": raw, "_needs_details": False, "_metadata_only": True},
+                    decision,
+                ),
             )
         )
 
@@ -253,7 +257,7 @@ class Ripley:
         result = SearchResult()
         found = {}
         visited = set()
-        for term in self.settings.terms:
+        for term in self.discovery_terms():
             url = (
                 BASE_URL
                 + "/search/"
@@ -302,9 +306,26 @@ class Ripley:
                                 "Página vacía antes de terminar los resultados"
                             )
                         for raw in native_products:
-                            product = self.normalize_native(raw, page)
-                            if product.classification != "DESCARTADO":
-                                found[product.key] = product
+                            try:
+                                product = self.normalize_native(raw, page)
+                                remember(found, product)
+                            except (ValueError, TypeError, AttributeError):
+                                result.complete = False
+                                result.errors.append(
+                                    "Tarjeta nativa incompleta; conservar enlaces verificables"
+                                )
+                                for href, name in page.links:
+                                    if not relevant_card({"productName": name}):
+                                        continue
+                                    try:
+                                        remember(
+                                            found,
+                                            self.failed_url(
+                                                urljoin(BASE_URL, href), name
+                                            ),
+                                        )
+                                    except (ValueError, TypeError):
+                                        pass
                         native_more = offset + len(native_products) < total
                         if not native_more:
                             break
@@ -344,16 +365,16 @@ class Ripley:
                             continue
                         if product.classification == "DESCARTADO":
                             continue
-                        if product.raw["_needs_details"] and re.search(
-                            r"\b(pokemon|tcg)\b", normalizar(product.name)
+                        if product.raw["_needs_details"] and relevant_card(
+                            {"productName": product.name, "brand": raw.get("brand", "")}
                         ):
                             try:
                                 product = self.details(product)
                             except (RemoteError, ValueError, TypeError):
+                                pending_detail(product)
                                 result.complete = False
                                 result.errors.append("Ficha sin detalles confirmables")
-                        if product.classification != "DESCARTADO":
-                            found[product.key] = product
+                        remember(found, product)
                     empty = re.search(
                         r"no encontramos (?:productos|resultados)|no se encontraron resultados|\b0 resultados\b|sin resultados",
                         normalizar(" ".join(page.text)),
