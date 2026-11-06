@@ -45,6 +45,60 @@ def configure(settings):
     return log
 
 
+def enrich_listing_metadata(result, adapter, store, retired, log, retailer):
+    """Read only a few direct PDPs when a native card omits identity/language.
+
+    No sitemap/category crawl. Persist attempts to avoid repeating enrichment
+    every minute when the storefront never supplies more metadata.
+    """
+    budget = 3
+    for index, product in enumerate(result.products):
+        decision = product.raw.get("_classification", {})
+        if (
+            product.key in retired
+            or product.classification != "POR_VERIFICAR"
+            or not isinstance(product.raw.get("native"), dict)
+            or not decision.get("review_needed")
+            or "30 aniversario" in decision.get("missing", [])
+        ):
+            continue
+        if budget == 0:
+            break
+        key = "metadata_attempt:" + product.key
+        previous = store.db.execute(
+            "SELECT value FROM meta WHERE key=?", (key,)
+        ).fetchone()
+        stamp = time.time()
+        if previous and stamp - float(previous[0]) < 14400:
+            continue
+        with store.db:
+            store.db.execute(
+                "INSERT OR REPLACE INTO meta VALUES(?,?)", (key, str(stamp))
+            )
+        budget -= 1
+        try:
+            detailed = adapter.details(product)
+            if detailed.key != product.key:
+                raise ValueError("Identidad distinta")
+            result.products[index] = detailed
+        except RemoteError as error:
+            log(
+                "metadata_enrichment_failed",
+                retailer=retailer,
+                product_key=product.key,
+                http_status=error.status,
+            )
+            if error.status in (401, 403, 429):
+                break
+        except (ValueError, TypeError, AttributeError):
+            log(
+                "metadata_enrichment_failed",
+                retailer=retailer,
+                product_key=product.key,
+                error="Ficha sin metadata verificable",
+            )
+
+
 def cycle(
     settings, store, adapter, telegram, log, *, discover=False, retailer="Plaza Vea"
 ):
@@ -69,6 +123,8 @@ def cycle(
             healthy = False
             log("search_incomplete", retailer=retailer, errors=result.errors)
     retired = store.retired_keys()
+    if result:
+        enrich_listing_metadata(result, adapter, store, retired, log, retailer)
     saved = [
         p for p in store.products() if p.retailer == retailer and p.key not in retired
     ]
@@ -99,6 +155,25 @@ def cycle(
         for p in result.products:
             if p.key in retired:
                 continue
+            changed = store.note_classification(p)
+            decision = p.raw.get("_classification", {})
+            if (
+                changed
+                and p.classification == "POR_VERIFICAR"
+                and (
+                    decision.get("review_needed")
+                    or decision.get("classification") == "CANDIDATO"
+                )
+            ):
+                log(
+                    "product_review_needed",
+                    retailer=retailer,
+                    product_key=p.key,
+                    name=p.name,
+                    url=p.url,
+                    missing=decision.get("missing")
+                    or ["vendedor u otras validaciones del retailer"],
+                )
             if p.classification != "CANDIDATO":
                 # Discovery metadata is sufficient to retain a pending entry, without
                 # paying for another detail request or changing any known stock.
@@ -291,7 +366,14 @@ def main():
         choices=["plazavea", "oechsle", "ripley", "ilahui", "tailoy", "falabella"],
         help="Limitar esta ejecución a una tienda",
     )
+    parser.add_argument(
+        "--include-pending",
+        action="store_true",
+        help="Con --list-products, incluir POR_VERIFICAR y motivos pendientes",
+    )
     args = parser.parse_args()
+    if args.include_pending and not args.list_products:
+        parser.error("--include-pending requiere --list-products")
     settings = Settings.load()
     log = configure(settings)
     try:
@@ -334,9 +416,30 @@ def main():
                                     "nombre": p.name,
                                     "url": p.url,
                                     "tienda": p.retailer,
+                                    **(
+                                        {
+                                            "clasificacion": p.classification,
+                                            "pendiente": p.raw.get(
+                                                "_classification", {}
+                                            ).get("missing", [])
+                                            or (
+                                                ["vendedor u otros datos sin confirmar"]
+                                                if p.classification == "POR_VERIFICAR"
+                                                else []
+                                            ),
+                                        }
+                                        if args.include_pending
+                                        else {}
+                                    ),
                                 }
                                 for p in store.products()
-                                if p.classification == "CANDIDATO"
+                                if (
+                                    p.classification == "CANDIDATO"
+                                    or (
+                                        args.include_pending
+                                        and p.classification == "POR_VERIFICAR"
+                                    )
+                                )
                                 and p.key not in retired
                                 and (
                                     not args.retailer

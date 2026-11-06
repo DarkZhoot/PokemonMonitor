@@ -14,7 +14,8 @@ from monitor.http import Client, RemoteError
 from monitor.models import Product, SearchResult, Stock, normalize_url
 from monitor.settings import Settings
 from monitor.sellers import restrict_ripley, ripley_seller, schema_seller
-from tiendas.vtex import classify, normalizar
+from tiendas.vtex import normalizar
+from monitor.classification import assess, annotated_raw
 
 BASE_URL = "https://simple.ripley.com.pe"
 
@@ -111,7 +112,7 @@ def evidence(raw):
         description=raw.get("description", ""),
         brand=brand,
     )
-    specs = {}
+    specs = {key: raw[key] for key in ("model", "mpn", "sku") if raw.get(key)}
     for prop in raw.get("additionalProperty", []) or []:
         if isinstance(prop, dict) and prop.get("name"):
             specs[str(prop["name"])] = prop.get("value", "")
@@ -121,7 +122,14 @@ def evidence(raw):
     if isinstance(variants, dict):
         variants = [variants]
     data["items"] = [
-        {"name": x.get("name", "")} for x in variants if isinstance(x, dict)
+        {
+            "name": x.get("name", ""),
+            "model": x.get("model", ""),
+            "mpn": x.get("mpn", ""),
+            "sku": x.get("sku", ""),
+        }
+        for x in variants
+        if isinstance(x, dict)
     ]
     return data
 
@@ -146,14 +154,18 @@ class Ripley:
         )
         if not match:
             raise ValueError("Identificador no reconocido")
+        decision = assess(evidence(raw), self.settings.exclusions)
         return restrict_ripley(
             Product(
                 match[1].upper(),
                 str(raw.get("name") or ""),
                 url,
-                classify(evidence(raw), self.settings.exclusions),
+                decision["classification"],
                 retailer="Ripley",
-                raw={"schema": raw, "_needs_details": not bool(raw.get("offers"))},
+                raw=annotated_raw(
+                    {"schema": raw, "_needs_details": not bool(raw.get("offers"))},
+                    decision,
+                ),
             )
         )
 
@@ -183,21 +195,15 @@ class Ripley:
                 break
         if not url:
             raise ValueError("Falta enlace directo verificable")
+        decision = assess(evidence(raw), self.settings.exclusions)
         return restrict_ripley(
             Product(
                 parent,
                 str(raw.get("name") or ""),
                 url,
-                classify(
-                    dict(
-                        productName=raw.get("name", ""),
-                        description=raw.get("description", ""),
-                        brand=raw.get("brand", ""),
-                    ),
-                    self.settings.exclusions,
-                ),
+                decision["classification"],
                 retailer="Ripley",
-                raw={"native": raw, "_needs_details": False},
+                raw=annotated_raw({"native": raw, "_needs_details": False}, decision),
             )
         )
 

@@ -1,4 +1,5 @@
 import json
+import hashlib
 import sqlite3
 import time
 from dataclasses import asdict
@@ -27,6 +28,32 @@ class Store:
 
     def close(self):
         self.db.close()
+
+    def note_classification(self, product):
+        decision = product.raw.get("_classification")
+        if not isinstance(decision, dict):
+            return False
+        signature = hashlib.sha256(
+            json.dumps(
+                {
+                    "decision": decision,
+                    "classification": product.classification,
+                    "name": product.name,
+                    "url": product.url,
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+        key = "classification:" + product.key
+        previous = self.db.execute(
+            "SELECT value FROM meta WHERE key=?", (key,)
+        ).fetchone()
+        if previous and previous[0] == signature:
+            return False
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, signature))
+        return True
 
     def retired_keys(self):
         return {

@@ -100,13 +100,13 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(p.name, r["productName"])
         self.assertEqual(p.raw["description"], "")
 
-    def test_shared_classifier_and_oechsle_not_relaxed(self):
+    def test_verified_identity_is_now_shared_with_oechsle(self):
         r = catalog(True)
-        self.assertEqual(classify(r, self.settings.exclusions), "POR_VERIFICAR")
+        self.assertEqual(classify(r, self.settings.exclusions), "CANDIDATO")
         r["link"] = r["link"].replace("www.plazavea.com.pe", "www.oechsle.pe")
         r["Vendido por"] = ["Oechsle"]
         self.assertEqual(
-            Oechsle(self.settings, Mock()).normalize(r).classification, "POR_VERIFICAR"
+            Oechsle(self.settings, Mock()).normalize(r).classification, "CANDIDATO"
         )
 
     def test_manual_retirement_still_prevents_monitoring(self):

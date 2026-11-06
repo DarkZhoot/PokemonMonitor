@@ -7,8 +7,9 @@ from urllib.parse import urljoin, urlsplit, parse_qs
 from monitor.http import Client, RemoteError
 from monitor.models import Product, SearchResult, Stock, normalize_url
 from monitor.settings import Settings
+from monitor.classification import assess, annotated_raw
 from tiendas.ripley import CatalogHTML, evidence
-from tiendas.vtex import classify, normalizar
+from tiendas.vtex import normalizar
 
 BASE_URL = "https://www.tailoy.com.pe"
 SEARCH_PATH = "/catalogsearch/result/index/"
@@ -139,13 +140,14 @@ class Tailoy:
             or not str(identifier).strip()
         ):
             raise ValueError("Ficha sin identificador verificable")
+        decision = assess(evidence(raw), self.settings.exclusions)
         return Product(
             str(identifier).strip(),
             str(raw.get("name") or ""),
             url,
-            classify(evidence(raw), self.settings.exclusions),
+            decision["classification"],
             retailer="Tai Loy",
-            raw={"schema": raw},
+            raw=annotated_raw({"schema": raw}, decision),
         )
 
     def details(self, product):

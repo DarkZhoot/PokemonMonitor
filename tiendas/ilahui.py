@@ -8,7 +8,8 @@ from monitor.http import Client, RemoteError
 from monitor.models import Product, SearchResult, Stock, normalize_url
 from monitor.settings import Settings
 from tiendas.ripley import CatalogHTML
-from tiendas.vtex import classify, normalizar
+from tiendas.vtex import normalizar
+from monitor.classification import assess, annotated_raw
 
 BASE_URL = "https://ilahuiperu.com"
 
@@ -78,17 +79,22 @@ class Ilahui:
         metadata["Etiquetas"] = raw.get("tags", [])
         variants = raw.get("variants")
         metadata["items"] = (
-            [{"name": v.get("title", "")} for v in variants if isinstance(v, dict)]
+            [
+                {"name": v.get("title", ""), "sku": v.get("sku", "")}
+                for v in variants
+                if isinstance(v, dict)
+            ]
             if isinstance(variants, list)
             else []
         )
+        decision = assess(metadata, self.settings.exclusions)
         return Product(
             str(raw["id"]),
             str(raw.get("title") or ""),
             url,
-            classify(metadata, self.settings.exclusions),
+            decision["classification"],
             retailer="Ilahui",
-            raw=raw,
+            raw=annotated_raw(raw, decision),
         )
 
     def details(self, product):

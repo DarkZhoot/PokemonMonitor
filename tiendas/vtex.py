@@ -2,55 +2,14 @@
 
 import math
 import re
-import unicodedata
 from urllib.parse import urljoin
 from monitor.http import Client, RemoteError
 from monitor.models import Product, SearchResult, Stock, normalize_url
 from monitor.settings import Settings
+from monitor.classification import classify, normalizar, assess, annotated_raw
 
 BASE_URL = "https://www.plazavea.com.pe"
 API = BASE_URL + "/api/catalog_system/pub/products/search"
-
-
-def normalizar(text):
-    return "".join(
-        c
-        for c in unicodedata.normalize("NFKD", str(text).lower())
-        if not unicodedata.combining(c)
-    )
-
-
-def classify(raw, exclusions):
-    fields = [
-        raw.get(k, "") for k in ("productName", "description", "brand", "categories")
-    ]
-    for key in raw.get("allSpecifications", []) or []:
-        if isinstance(key, str):
-            fields.extend([key, raw.get(key, "")])
-    for item in raw.get("items", []) or []:
-        if not isinstance(item, dict):
-            continue
-        fields.extend(
-            item.get(k, "") for k in ("name", "nameComplete", "complementName")
-        )
-        for key in item.get("variations", []) or []:
-            if isinstance(key, str):
-                fields.extend([key, item.get(key, "")])
-    text = normalizar(" ".join(str(x) for x in fields))
-    if any(
-        re.search(r"(?<!\w)" + re.escape(normalizar(x)) + r"(?!\w)", text)
-        for x in exclusions
-    ):
-        return "DESCARTADO"
-    if not re.search(r"\bpokemon\b", text) or not re.search(
-        r"\b(tcg|trading card game)\b", text
-    ):
-        return "POR_VERIFICAR"
-    if not re.search(
-        r"\b30\s*[.oº°]*\s*(aniversario|anniversary)\b|\b30th\s+anniversary\b", text
-    ):
-        return "POR_VERIFICAR"
-    return "CANDIDATO" if re.search(r"\b(ingles|english)\b", text) else "POR_VERIFICAR"
 
 
 class VtexRetailer:
@@ -73,13 +32,14 @@ class VtexRetailer:
         )
         if not link:
             raise ValueError("Falta URL")
+        decision = assess(raw, self.settings.exclusions)
         return Product(
             str(raw["productId"]),
             str(raw.get("productName") or ""),
             normalize_url(urljoin(self.base_url, link), self.retailer),
-            classify(raw, self.settings.exclusions),
+            decision["classification"],
             retailer=self.retailer,
-            raw=raw,
+            raw=annotated_raw(raw, decision),
         )
 
     def params(self):

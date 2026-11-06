@@ -11,9 +11,10 @@ from urllib.parse import urljoin, urlsplit, parse_qs
 from monitor.http import Client, RemoteError
 from monitor.models import Product, SearchResult, Stock, normalize_url
 from monitor.settings import Settings
+from monitor.classification import assess, annotated_raw
 from monitor.sellers import restrict_falabella, falabella_offer_seller
 from tiendas.ripley import CatalogHTML, evidence
-from tiendas.vtex import classify, normalizar
+from tiendas.vtex import normalizar
 
 BASE_URL = "https://www.falabella.com.pe"
 SEARCH_URL = BASE_URL + "/falabella-pe/search"
@@ -33,14 +34,15 @@ class Falabella:
     def normalize(self, raw):
         url = normalize_url(urljoin(BASE_URL, raw.get("url", "")), self.retailer)
         identifier = urlsplit(url).path.split("/")[3]
+        decision = assess(evidence(raw), self.settings.exclusions)
         return restrict_falabella(
             Product(
                 identifier,
                 str(raw.get("name") or ""),
                 url,
-                classify(evidence(raw), self.settings.exclusions),
+                decision["classification"],
                 retailer=self.retailer,
-                raw={"schema": raw, "_needs_details": True},
+                raw=annotated_raw({"schema": raw, "_needs_details": True}, decision),
             )
         )
 

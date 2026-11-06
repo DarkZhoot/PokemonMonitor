@@ -667,7 +667,7 @@ con figura `102355697` (modelo `10-10452-120`, variantes MEWTWO/MEW) como
 `POR_VERIFICAR`. No habían desaparecido del catálogo ni habían sido retiradas
 con `--retire-product`.
 
-Solo el adaptador Plaza Vea añade evidencia de identidad a la clasificación:
+La evidencia inicialmente validada para Plaza Vea se comparte ahora entre los seis adaptadores:
 
 - Las variantes MEW/MEWTWO proporcionan identidad Pokémon dentro del contexto
   de marca TCG. El idioma inglés y la edición 30 siguen siendo obligatorios.
@@ -681,8 +681,8 @@ El nombre, descripción, URL y reglas de stock no se modifican. Se registra la
 procedencia en `raw._identity_evidence`; no se utiliza una lista de URLs/IDs para
 forzar seguimiento. Un SKU distinto con las mismas variantes explícitas puede
 identificarse. Los conflictos con otros juegos, exclusiones por idioma y otras
-ediciones no se aceptan. Los otros retailers y el clasificador compartido no
-cambian, ni se añaden peticiones al descubrimiento por esta corrección.
+ediciones no se aceptan. Los filtros de vendedor y las reglas de stock permanecen intactos. La lectura
+adicional limitada de fichas nativas se describe en la sección de prevención.
 
 Tras actualizar, un descubrimiento forzado reclasifica esos registros existentes
 sin borrar el historial:
@@ -699,3 +699,56 @@ La presencia de una imagen en el navegador no es una lectura automática de esa
 imagen: los modelos indicados se verificaron manualmente a partir de la evidencia
 aportada. La corrección no reactiva productos retirados expresamente y no implica
 que una búsqueda descubra todo el catálogo.
+
+
+## Prevención de candidatos omitidos por metadatos incompletos
+
+Los seis adaptadores usan `monitor.classification` para clasificar identidad,
+TCG, edición e idioma. No se exige que todas las palabras aparezcan en el título:
+se consideran descripción, marca, especificaciones declaradas, variantes y modelos
+explícitos del producto. Los adaptadores schema.org conservan `model`, `mpn`,
+`sku` y variantes; Shopify conserva los títulos y SKU de variante. Se decodifican
+entidades HTML como `Pok&eacute;mon` o `ingl&eacute;s`.
+
+La marca genérica TCG sola NO confirma Pokémon. Las variantes Mew/Mewtwo y otros nombres Pokémon distintivos, junto con los
+modelos verificados con familia coincidente sirven como evidencia adicional,
+manteniendo 30 aniversario e inglés como requisitos separados. Otros modelos
+sin evidencia siguen pendientes. Conflictos explícitos con otros juegos no se
+promueven. Las exclusiones de idioma, los filtros de vendedor propio, los productos
+retirados y las reglas de stock se conservan.
+
+Cada producto normalizado lleva `raw._classification`: clasificación, datos que
+faltan, exclusiones e identidad utilizada. Cuando una publicación cercana al
+objetivo queda `POR_VERIFICAR`, se registra `product_review_needed` con nombre,
+URL y campos pendientes. Se deduplica por clave y firma persistente: no se repite
+cada minuto si la información no cambia. Estos avisos son diagnósticos, no alertas
+Telegram de disponibilidad. La cola de stock no recibe productos sin confirmar.
+
+En una tarjeta nativa Ripley de TCG 30 aniversario que omite identidad/idioma,
+se intenta leer su ficha directa para enriquecer metadatos: máximo tres por
+búsqueda y una vez cada cuatro horas por producto. No se recorren sitemaps,
+categorías ni enlaces ocultos. Se detiene el enriquecimiento al recibir 401/403/429;
+no se eluden bloqueos ni se infiere identidad a partir del término buscado. Las
+otras integraciones ya reciben detalles de producto en su flujo habitual.
+
+Para inspeccionar candidatos y pendientes con el servicio detenido:
+
+```bash
+.venv/bin/python main.py --list-products --include-pending
+.venv/bin/python main.py --retailer oechsle --list-products --include-pending
+```
+
+La opción no consulta la red. El modo anterior sin `--include-pending` sigue
+mostrando solo candidatos. Para consultar avisos sin detener el servicio:
+
+```bash
+sudo journalctl -u pokemonmonitor --since "30 minutes ago" -o cat --no-pager | grep -E 'product_review_needed|metadata_enrichment_failed'
+```
+
+Después de actualizar, los motivos se completan al recibir productos en el
+siguiente descubrimiento de cada tienda, respetando su cooldown tras fallos.
+Los datos antiguos sin diagnóstico conservan el historial. La prevención mejora
+el uso de metadatos y hace visibles las dudas, pero no garantiza descubrir una
+publicación que el buscador no devuelve ni identificar una ficha sin evidencia.
+No se ha validado todo el catálogo real de todos los retailers: las regresiones
+comprueban los seis adaptadores con fixtures y los casos aportados por el usuario.
