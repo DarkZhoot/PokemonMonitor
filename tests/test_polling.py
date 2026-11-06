@@ -391,3 +391,132 @@ class PollingTests(unittest.TestCase):
                 store.discovery_due(60, 900, timestamp=1060, retailer="Oechsle")
             )
             store.close()
+
+    def test_worker_uses_monotonic_deadline_as_timestamp_floor(self):
+        settings = replace(Settings(), interval=60)
+        stamps = []
+
+        class StopAfterThree:
+            stopped = False
+            waits = 0
+
+            def is_set(self):
+                return self.stopped
+
+            def wait(self, delay):
+                self.waits += 1
+                self.stopped = self.waits == 3
+                return self.stopped
+
+        def run_cycle(*args, **kwargs):
+            stamps.append(kwargs["cycle_timestamp"])
+
+        worker = RetailerPolling(settings, Mock(), run_cycle, "Ilahui", Mock())
+        worker.stop_event = StopAfterThree()
+        with patch("monitor.store.Store"), patch("monitor.telegram.Telegram"), patch(
+            "monitor.polling.time.monotonic",
+            side_effect=[100, 102, 102, 160.01, 162, 162, 220.02, 222, 222],
+        ), patch("monitor.polling.time.time", side_effect=[1000, 1059.9999, 1119.9999]):
+            worker.run()
+        self.assertEqual(stamps, [1000, 1060, 1120])
+
+    def test_due_check_and_discovery_persist_same_tick_despite_preparation_delay(self):
+        from monitor.app import scheduled_cycle
+        from monitor.models import SearchResult
+
+        store = Store(":memory:")
+        settings = replace(Settings(), ilahui_discovery_interval=60)
+        adapter = Mock()
+        adapter.search.return_value = SearchResult()
+        with patch("monitor.app.PRODUCTOS", []), patch(
+            "monitor.app.deliver", return_value=True
+        ):
+            for tick in [100, 160, 220]:
+                # Clock read after logging/Telegram is a fraction later than the poll tick.
+                with patch("monitor.store.time.time", return_value=tick + 0.375):
+                    scheduled_cycle(
+                        settings,
+                        store,
+                        adapter,
+                        Mock(),
+                        Mock(),
+                        retailer="Ilahui",
+                        cycle_timestamp=tick,
+                    )
+        self.assertEqual(adapter.search.call_count, 3)
+        key = store.discovery_keys("Ilahui")[1]
+        self.assertEqual(
+            float(
+                store.db.execute(
+                    "SELECT value FROM meta WHERE key=?", (key,)
+                ).fetchone()[0]
+            ),
+            220,
+        )
+        store.close()
+
+    def test_failed_discovery_still_waits_full_retry_interval(self):
+        from monitor.app import scheduled_cycle
+        from monitor.models import SearchResult
+
+        store = Store(":memory:")
+        settings = replace(
+            Settings(), ilahui_discovery_interval=60, discovery_retry_interval=900
+        )
+        adapter = Mock()
+        adapter.search.side_effect = [
+            SearchResult(complete=False, errors=["HTTP 502"]),
+            SearchResult(),
+        ]
+        with patch("monitor.app.PRODUCTOS", []), patch(
+            "monitor.app.deliver", return_value=True
+        ):
+            for tick in [100, 160, 220, 999]:
+                scheduled_cycle(
+                    settings,
+                    store,
+                    adapter,
+                    Mock(),
+                    Mock(),
+                    retailer="Ilahui",
+                    cycle_timestamp=tick,
+                )
+            self.assertEqual(adapter.search.call_count, 1)
+            scheduled_cycle(
+                settings,
+                store,
+                adapter,
+                Mock(),
+                Mock(),
+                retailer="Ilahui",
+                cycle_timestamp=1000,
+            )
+        self.assertEqual(adapter.search.call_count, 2)
+        store.close()
+
+    def test_plaza_four_hour_discovery_keeps_completion_reference(self):
+        from monitor.app import scheduled_cycle
+        from monitor.models import SearchResult
+
+        store = Store(":memory:")
+        adapter = Mock()
+        adapter.search.return_value = SearchResult()
+        with patch("monitor.app.PRODUCTOS", []), patch(
+            "monitor.app.deliver", return_value=True
+        ), patch("monitor.store.time.time", return_value=200):
+            scheduled_cycle(
+                Settings(),
+                store,
+                adapter,
+                Mock(),
+                Mock(),
+                retailer="Plaza Vea",
+                cycle_timestamp=100,
+            )
+        self.assertFalse(
+            store.discovery_due(14400, 900, timestamp=14500, retailer="Plaza Vea")
+        )
+        self.assertTrue(
+            store.discovery_due(14400, 900, timestamp=14600, retailer="Plaza Vea")
+        )
+        store.close()

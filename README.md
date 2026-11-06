@@ -752,3 +752,25 @@ el uso de metadatos y hace visibles las dudas, pero no garantiza descubrir una
 publicación que el buscador no devuelve ni identificar una ficha sin evidencia.
 No se ha validado todo el catálogo real de todos los retailers: las regresiones
 comprueban los seis adaptadores con fixtures y los casos aportados por el usuario.
+
+
+## Coordinación del reloj de revisión y descubrimiento
+
+El trabajador captura un único timestamp al inicio de cada vuelta y lo utiliza
+para comprobar si toca descubrir y para registrar el intento. En tiendas distintas
+de Plaza Vea también es la fecha del descubrimiento completado. Antes la fecha
+se guardaba después de preparar la consulta (por ejemplo, 0.375 s más tarde);
+en la vuelta de los 60 s solo habían transcurrido 59.625 s para ese segundo reloj
+y la búsqueda se saltaba hasta la siguiente vuelta.
+
+El deadline monotónico de cada trabajador fija además el mínimo del siguiente
+snapshot para evitar desfases de redondeo entre relojes. No se adelantan consultas
+con una tolerancia arbitraria ni se fuerza el descubrimiento ignorando su estado.
+El intervalo configurado de 60 s es un objetivo entre inicios de revisión: las
+variaciones de red pueden cambiar la hora de finalización de cada búsqueda.
+
+El backoff de búsquedas fallidas, 15 minutos por defecto, se conserva. Una
+búsqueda de 60 s no se reintenta cada minuto frente a 403/429/502. Plaza Vea sigue
+usando la finalización de su búsqueda completa para sus cuatro horas, y su revisión
+de productos conserva `PLAZAVEA_POLL_INTERVAL`. No se modifica el `.env`, la base
+de datos, la clasificación ni el historial de alertas para aplicar esta corrección.

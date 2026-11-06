@@ -100,7 +100,15 @@ def enrich_listing_metadata(result, adapter, store, retired, log, retailer):
 
 
 def cycle(
-    settings, store, adapter, telegram, log, *, discover=False, retailer="Plaza Vea"
+    settings,
+    store,
+    adapter,
+    telegram,
+    log,
+    *,
+    discover=False,
+    retailer="Plaza Vea",
+    discovery_timestamp=None,
 ):
     started = time.monotonic()
     healthy = True
@@ -108,7 +116,14 @@ def cycle(
     result = None
     discovery_stamp = None
     if discover:
-        discovery_stamp = store.mark_discovery(retailer=retailer)
+        discovery_stamp = store.mark_discovery(
+            retailer=retailer,
+            **(
+                {"timestamp": discovery_timestamp}
+                if discovery_timestamp is not None
+                else {}
+            ),
+        )
         log("discovery_started", retailer=retailer)
         try:
             result = adapter.search()
@@ -279,6 +294,7 @@ def scheduled_cycle(
     *,
     force_discovery=False,
     retailer="Plaza Vea",
+    cycle_timestamp=None,
 ):
     interval = {
         "Ripley": settings.ripley_discovery_interval,
@@ -291,9 +307,21 @@ def scheduled_cycle(
         interval,
         settings.discovery_retry_interval,
         retailer=retailer,
+        **({"timestamp": cycle_timestamp} if cycle_timestamp is not None else {}),
     )
     return cycle(
-        settings, store, adapter, telegram, log, discover=due, retailer=retailer
+        settings,
+        store,
+        adapter,
+        telegram,
+        log,
+        discover=due,
+        retailer=retailer,
+        **(
+            {"discovery_timestamp": cycle_timestamp}
+            if cycle_timestamp is not None
+            else {}
+        ),
     )
 
 

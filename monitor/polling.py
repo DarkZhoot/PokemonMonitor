@@ -52,8 +52,14 @@ class RetailerPolling:
                 store = Store(self.settings.data_dir / "monitor.sqlite3")
                 adapter = self.factory(self.settings)
                 telegram = Telegram(self.settings)
+                next_timestamp = None
                 while not self.stop_event.is_set():
                     started = time.monotonic()
+                    # Use the same tick for due checks and persisted discovery dates.
+                    # Preserve the monotonic deadline despite wall-clock rounding.
+                    cycle_timestamp = time.time()
+                    if next_timestamp is not None:
+                        cycle_timestamp = max(cycle_timestamp, next_timestamp)
                     self.log("retailer_cycle_started", retailer=self.retailer)
                     try:
                         self.run_cycle(
@@ -63,6 +69,7 @@ class RetailerPolling:
                             telegram,
                             self.log,
                             retailer=self.retailer,
+                            cycle_timestamp=cycle_timestamp,
                         )
                     except Exception:
                         self.log(
@@ -71,6 +78,7 @@ class RetailerPolling:
                             error="Error de revisión independiente; se reintentará",
                         )
                     target = next_poll(started, time.monotonic(), self.interval)
+                    next_timestamp = cycle_timestamp + (target - started)
                     if self.stop_event.wait(max(0, target - time.monotonic())):
                         break
             except Exception:
