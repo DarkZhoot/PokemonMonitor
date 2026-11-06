@@ -17,13 +17,15 @@ class PollingTests(unittest.TestCase):
         self.assertEqual(next_poll(100, 160, 45), 205)
 
     def test_env_accepts_45_without_changing_other_clocks(self):
-        with patch.dict(
+        # Exercise defaults independently of the operator's environment/.env.
+        with patch("monitor.settings.load_dotenv"), patch.dict(
             "os.environ",
             {
                 "PLAZAVEA_POLL_INTERVAL": "45",
                 "MONITOR_INTERVAL": "120",
                 "DISCOVERY_INTERVAL": "14400",
             },
+            clear=True,
         ):
             s = Settings.load()
         self.assertEqual(s.plazavea_poll_interval, 45)
