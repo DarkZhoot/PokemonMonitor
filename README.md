@@ -512,3 +512,55 @@ los candidatos guardados sin consultar la red. `main.py --loop` ejecuta todas la
 tiendas activadas. El reloj de descubrimiento de Falabella es independiente y
 predetermina 120 segundos; el ciclo completo y la espera posterior hacen que la
 frecuencia real no sea exactamente de dos minutos. Los demás adaptadores no cambian.
+
+
+## Revisión independiente de Plaza Vea cada 45 segundos
+
+En el `.env` del servidor puede activarse:
+
+```dotenv
+PLAZAVEA_POLL_INTERVAL=45
+DISCOVERY_INTERVAL=14400
+```
+
+`PLAZAVEA_POLL_INTERVAL=0` (predeterminado) conserva el modo secuencial anterior.
+Con un valor entre 15 y 86400, únicamente `--loop` revisa Plaza Vea en un hilo
+independiente. Las otras tiendas conservan sus intervalos y `MONITOR_INTERVAL`
+sigue siendo su pausa global (mínimo 60); no debe cambiarse a 45.
+El proceso conserva el bloqueo único, la base SQLite y el historial actuales.
+Cada hilo tiene su propia conexión SQLite y sesiones HTTP; la selección/envío de
+alertas de la cola compartida se serializa para evitar envíos simultáneos duplicados.
+
+El objetivo es iniciar una revisión cada 45 s sin esperar por búsquedas de otras
+tiendas. Si el ciclo de Plaza Vea dura más del intervalo, se espera otro intervalo
+completo después de terminar: no hay revisiones superpuestas ni ráfagas para
+recuperar tiempo. HTTP/Telegram lentos, pausas del servidor y límites de la tienda
+pueden retrasar la cadencia. Se conservan los reintentos y backoff existentes.
+Con 11 productos supone aproximadamente 15 consultas por minuto fuera del
+descubrimiento, sin garantía contra límites 429 o bloqueos 403.
+
+La búsqueda de nuevos productos sigue gobernada por `DISCOVERY_INTERVAL`
+(cuatro horas por defecto). Mientras esa búsqueda se ejecuta en el mismo hilo,
+no se consulta simultáneamente el catálogo de Plaza Vea. `--once` y `--discover`
+siguen siendo operaciones finitas, secuenciales y sujetas al bloqueo existente.
+Al activar la opción se registra `plazavea_polling_started` con el intervalo.
+No hay que crear servicios adicionales ni otra base de datos.
+
+Actualizar el servidor con el servicio detenido y luego reiniciarlo:
+
+```bash
+cd ~/PokemonMonitor
+sudo systemctl stop pokemonmonitor
+git pull --ff-only origin feature/telegram-stock-monitor
+nano .env
+# Añadir o sustituir PLAZAVEA_POLL_INTERVAL=45, sin duplicar la variable.
+# Mantener DISCOVERY_INTERVAL=14400 para descubrir cada cuatro horas.
+sudo systemctl start pokemonmonitor
+sudo systemctl status pokemonmonitor --no-pager
+sudo journalctl -u pokemonmonitor -n 40 --no-pager
+```
+
+Comparar las fechas `product_checked` del mismo `product_key` en ciclos sucesivos
+para comprobar la cadencia real. Los registros de las otras tiendas pueden
+intercalarse, puesto que los dos bucles trabajan en paralelo. Para volver al modo
+anterior, cambiar `PLAZAVEA_POLL_INTERVAL=0` y reiniciar el servicio.

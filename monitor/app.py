@@ -5,6 +5,7 @@ from logging.handlers import RotatingFileHandler
 import time
 from config import PRODUCTOS
 from monitor.http import RemoteError
+from monitor.polling import PlazaPolling
 from monitor.locking import exclusive, AlreadyRunning
 from monitor.models import Product, Stock, normalize_url
 from monitor.settings import Settings, ROOT
@@ -271,6 +272,7 @@ def main():
     try:
         with exclusive(settings.data_dir / "monitor.lock"):
             store = Store(settings.data_dir / "monitor.sqlite3")
+            plaza_polling = None
             try:
                 store.migrate(ROOT)
                 enforce_seller_scopes(store, log)
@@ -331,7 +333,17 @@ def main():
                     if slug in enabled:
                         selected = settings.for_retailer(slug)
                         adapters[name] = (selected, factory(selected))
+                if (
+                    args.loop
+                    and settings.plazavea_poll_interval
+                    and "Plaza Vea" in adapters
+                ):
+                    plaza_settings, _ = adapters.pop("Plaza Vea")
+                    plaza_polling = PlazaPolling(plaza_settings, log, scheduled_cycle)
+                    plaza_polling.start()
                 while True:
+                    if plaza_polling and not plaza_polling.thread.is_alive():
+                        return 1
                     try:
                         ok = run_retailers(
                             settings,
@@ -354,12 +366,16 @@ def main():
                     # Retry queued Telegram deliveries while respecting the retailer interval.
                     end = time.monotonic() + settings.interval
                     while time.monotonic() < end:
+                        if plaza_polling and not plaza_polling.thread.is_alive():
+                            return 1
                         time.sleep(min(5, max(0, end - time.monotonic())))
                         try:
                             deliver(store, telegram, log)
                         except Exception:
                             log("delivery_failure", error="No se pudo procesar la cola")
             finally:
+                if plaza_polling:
+                    plaza_polling.close()
                 store.close()
     except AlreadyRunning:
         log("already_running")

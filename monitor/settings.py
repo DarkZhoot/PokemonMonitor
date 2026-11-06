@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class Settings:
     data_dir: Path = ROOT / "runtime"
     interval: int = 120
+    plazavea_poll_interval: int = 0
     discovery_interval: int = 14400
     discovery_retry_interval: int = 900
     timeout: int = 20
@@ -161,6 +162,14 @@ class Settings:
             ):
                 raise ValueError(f"{env}: fuera de rango")
             setattr(s, attr, value)
+        s.plazavea_poll_interval = int(os.getenv("PLAZAVEA_POLL_INTERVAL", "0"))
+        if (
+            s.plazavea_poll_interval != 0
+            and not 15 <= s.plazavea_poll_interval <= 86400
+        ):
+            raise ValueError(
+                "PLAZAVEA_POLL_INTERVAL: usa 0 o entre 15 y 86400 segundos"
+            )
         s.request_delay = float(os.getenv("MONITOR_REQUEST_DELAY", "1"))
         if not 0.5 <= s.request_delay <= 60:
             raise ValueError("MONITOR_REQUEST_DELAY: fuera de rango")

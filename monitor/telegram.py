@@ -1,5 +1,7 @@
 import json
 import time
+import threading
+from functools import wraps
 import requests
 from monitor.http import retry_delay
 from monitor.store import now
@@ -56,6 +58,21 @@ class Telegram:
         return False, 60, f"Telegram HTTP {code}", code in (400, 401, 403, 404)
 
 
+# Both polling threads share the same persistent queue. Serialize selection,
+# sending and acknowledgement so they cannot send the same pending event twice.
+_delivery_lock = threading.RLock()
+
+
+def serialized_delivery(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with _delivery_lock:
+            return function(*args, **kwargs)
+
+    return wrapped
+
+
+@serialized_delivery
 def deliver(store, telegram, log):
     enforce_seller_scopes(store, log)
     if not telegram.settings.token or not telegram.settings.chat_id:
